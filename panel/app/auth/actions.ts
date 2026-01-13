@@ -31,7 +31,6 @@ export async function loginWithToken(token: string) {
     sameSite: "lax",
     secure: getIsSecure(),
     path: "/",
-    expires: new Date(s.expires_at),
   });
 
   redirect("/links");
