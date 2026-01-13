@@ -554,40 +554,10 @@ const session = event.data.object;
       // __FYD_ADDON_INVOICE_SKIP_V1__
       console.log("[stripe] addon invoice ignored (handled by checkout.session.completed)");
       return;
-try {
-        const inv = await stripeApi.invoices.retrieve(invoiceId, { expand: ["lines.data.price"] });
+// addon invoices ignorujemy — addony obsługuje checkout.session.completed
+console.log("[stripe] addon invoice ignored (handled by checkout.session.completed)");
+return;
 
-        let packs = 0;
-        for (const line of (inv?.lines?.data || [])) {
-          const pid = line?.price?.id ? String(line.price.id) : "";
-          if (pid === addonPriceId) packs += Number(line.quantity || 0) || 0;
-        }
-
-        if (packs > 0) {
-          const ins = await db.query(
-            `INSERT INTO addon_invoice_applied (stripe_invoice_id, user_id, packs)
-             VALUES ($1,$2,$3)
-             ON CONFLICT (stripe_invoice_id) DO NOTHING
-             RETURNING stripe_invoice_id`,
-            [invoiceId, userId, packs]
-          );
-
-          if (ins.rowCount > 0) {
-            await db.query(
-              `UPDATE subscriptions s
-               SET addon_qty = COALESCE(s.addon_qty,0) + $2,
-                   updated_at = NOW()
-               FROM plans p
-               WHERE p.id = s.plan_id
-                 AND p.code = 'platinum'
-                 AND s.user_id = $1
-                 AND s.status = 'active'`,
-              [userId, packs]
-            );
-            console.log("[stripe] addon applied from invoice", { invoiceId, userId, packs });
-          }
-        }
-      } catch (e) {
         console.error("[stripe] addon invoice handling error", e?.message || e);
       }
     }
