@@ -69,3 +69,8 @@ node
 none
 normalize
 jeśli
+[api
+[api]
+[internal]
+[worker
+[worker]
