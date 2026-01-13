@@ -150,7 +150,7 @@ function isPlanSubscription(sub) {
 
 
 async function upsertPlanSubscriptionRow(sqlPoolArg, userIdArg, stripeCustomerIdArg, subArg) {
-  const db =
+  const dbc =
     (sqlPoolArg && typeof sqlPoolArg.query === "function") ? sqlPoolArg :
     (typeof sqlPool !== "undefined" && sqlPool && typeof sqlPool.query === "function") ? sqlPool :
     null;
@@ -195,7 +195,7 @@ async function upsertPlanSubscriptionRow(sqlPoolArg, userIdArg, stripeCustomerId
 
   // UPDATE -> INSERT (bez ON CONFLICT, bo nie zakładamy constraintu)
   try {
-    const upd = await db.query(
+    const upd = await dbc.query(
       `UPDATE public.subscriptions
           SET user_id=$1,
               plan_id=$2,
@@ -208,7 +208,7 @@ async function upsertPlanSubscriptionRow(sqlPoolArg, userIdArg, stripeCustomerId
     );
 
     if ((upd?.rowCount || 0) == 0) {
-      await db.query(
+      await dbc.query(
         `INSERT INTO public.subscriptions
            (user_id, plan_id, provider, provider_subscription_id, provider_customer_id, status, current_period_end, created_at)
          VALUES
@@ -218,7 +218,7 @@ async function upsertPlanSubscriptionRow(sqlPoolArg, userIdArg, stripeCustomerId
     }
   } catch (e) {
     // fallback minimalny (gdy brakuje kolumn typu provider_customer_id/status/current_period_end)
-    const upd2 = await db.query(
+    const upd2 = await dbc.query(
       `UPDATE public.subscriptions
           SET user_id=$1, plan_id=$2
         WHERE provider='stripe' AND provider_subscription_id=$3
@@ -226,7 +226,7 @@ async function upsertPlanSubscriptionRow(sqlPoolArg, userIdArg, stripeCustomerId
       [userId, planId, subId]
     );
     if ((upd2?.rowCount || 0) == 0) {
-      await db.query(
+      await dbc.query(
         `INSERT INTO public.subscriptions (user_id, plan_id, provider, provider_subscription_id, created_at)
          VALUES ($1,$2,'stripe',$3,NOW())`,
         [userId, planId, subId]
@@ -237,7 +237,7 @@ async function upsertPlanSubscriptionRow(sqlPoolArg, userIdArg, stripeCustomerId
   // users: plan + expiry (jak się da)
   try {
     if (stripeCustomerId) {
-      await db.query(
+      await dbc.query(
         `UPDATE public.users
             SET stripe_customer_id=$1, updated_at=NOW()
           WHERE id=$2 AND (stripe_customer_id IS NULL OR stripe_customer_id=$1)`,
@@ -247,7 +247,7 @@ async function upsertPlanSubscriptionRow(sqlPoolArg, userIdArg, stripeCustomerId
   } catch {}
 
   try {
-    await db.query(
+    await dbc.query(
       `UPDATE public.users u
           SET plan_name=p.code,
               plan_expires_at=$2,
@@ -258,7 +258,7 @@ async function upsertPlanSubscriptionRow(sqlPoolArg, userIdArg, stripeCustomerId
     );
   } catch {}
 
-  try { await db.query(`UPDATE public.users SET trial_used=TRUE, updated_at=NOW() WHERE id=$1`, [userId]); } catch {}
+  try { await dbc.query(`UPDATE public.users SET trial_used=TRUE, updated_at=NOW() WHERE id=$1`, [userId]); } catch {}
 
   return true;
 }
