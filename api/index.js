@@ -39,6 +39,7 @@ async function countEnabledLinksForUserId(userId) {
 import express from "express";
 
 import { makeRequireUser } from "./panel-dev-auth.js";
+import { createTelegramClient } from "./telegram.js";
 import pg__fyd from "pg";
 const { Pool: Pool__fyd } = pg__fyd;
 
@@ -791,22 +792,7 @@ mode: "subscription",
 });
 
 // =================== TELEGRAM CONFIG ===================
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
-const TG_API = BOT_TOKEN ? `https://api.telegram.org/bot${BOT_TOKEN}` : "";
-
-// SEND MESSAGE
-async function tgSend(chatId, text) {
-  if (!TG_API) return;
-  try {
-    await fetch(`${TG_API}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text })
-    });
-  } catch (err) {
-    console.error("tgSend error:", err);
-  }
-}
+const { sendMessage: tgSend } = createTelegramClient();
 
 // =================== PANEL AUTH (DEV) ===================
 const requireUser = makeRequireUser({ ensureUser, getUserWithPlanByTelegramId, getUserEntitlementsByTelegramId });
