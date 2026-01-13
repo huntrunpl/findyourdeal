@@ -535,53 +535,45 @@ const session = event.data.object;
   }
 
   // invoice.*
-  // Addon rozliczamy po invoice (bo payload bywa bez subscription/lines)
-  if (t === "invoice.paid" || t === "invoice.payment_succeeded" || t === "invoice.payment_failed") {
-    const invoice = event.data.object;
-    const invoiceId = invoice?.id ? String(invoice.id) : null;
-    const stripeCustomerId = invoice?.customer ? String(invoice.customer) : null;
-    if (!invoiceId || !stripeCustomerId) return;
+// Addon rozliczamy po invoice (bo payload bywa bez subscription/lines)
+if (t === "invoice.paid" || t === "invoice.payment_succeeded" || t === "invoice.payment_failed") {
+  const invoice = event.data.object;
+  const invoiceId = invoice?.id ? String(invoice.id) : null;
+  const stripeCustomerId = invoice?.customer ? String(invoice.customer) : null;
+  if (!invoiceId || !stripeCustomerId) return;
 
-    const ur = await db.query("SELECT id FROM users WHERE stripe_customer_id=$1 LIMIT 1", [stripeCustomerId]);
-    const userId = ur.rows[0]?.id || null;
-    if (!userId) return;
+  const ur = await db.query("SELECT id FROM users WHERE stripe_customer_id=$1 LIMIT 1", [stripeCustomerId]);
+  const userId = ur.rows[0]?.id || null;
+  if (!userId) return;
 
-    const addonPriceId = process.env.FYD_PRICE_ADDON10 || process.env.STRIPE_PRICE_ADDON || "";
+  const addonPriceId = process.env.FYD_PRICE_ADDON10 || process.env.STRIPE_PRICE_ADDON || "";
 
-    // jeśli opłacone: nalicz addon(y) po liniach faktury (idempotencja po invoice_id)
-    if (addonPriceId && (t === "invoice.paid" || t === "invoice.payment_succeeded")) {
-      
-      // __FYD_ADDON_INVOICE_SKIP_V1__
-      console.log("[stripe] addon invoice ignored (handled by checkout.session.completed)");
-      return;
-// addon invoices ignorujemy — addony obsługuje checkout.session.completed
-console.log("[stripe] addon invoice ignored (handled by checkout.session.completed)");
-return;
-
-        console.error("[stripe] addon invoice handling error", e?.message || e);
-      }
-    }
-
-    // standard: jak mamy subscription, aktualizuj sub row / addon qty
-    let stripeSubscriptionId = invoice?.subscription ? String(invoice.subscription) : null;
-    if (!stripeSubscriptionId) {
-      try {
-        const inv2 = await stripeApi.invoices.retrieve(invoiceId);
-        if (inv2?.subscription) stripeSubscriptionId = String(inv2.subscription);
-      } catch (_) {}
-    }
-    if (!stripeSubscriptionId) return;
-
-    const sub = await stripeApi.subscriptions.retrieve(stripeSubscriptionId, { expand: ["items.data.price"] });
-    if (isPlanSubscription(sub)) {
-      await upsertPlanSubscriptionRow(sqlPool, userId, stripeCustomerId, sub);
-    } else {
-      // addon handled by checkout.session.completed
-    }
+  // addon invoices ignorujemy — addony obsługuje checkout.session.completed
+  if (addonPriceId && (t === "invoice.paid" || t === "invoice.payment_succeeded")) {
+    console.log("[stripe] addon invoice ignored (handled by checkout.session.completed)");
     return;
   }
 
-  // inne eventy: logujemy w DB i kończymy
+  // standard: jak mamy subscription, aktualizuj sub row / addon qty
+  let stripeSubscriptionId = invoice?.subscription ? String(invoice.subscription) : null;
+  if (!stripeSubscriptionId) {
+    try {
+      const inv2 = await stripeApi.invoices.retrieve(invoiceId);
+      if (inv2?.subscription) stripeSubscriptionId = String(inv2.subscription);
+    } catch (_) {}
+  }
+  if (!stripeSubscriptionId) return;
+
+  const sub = await stripeApi.subscriptions.retrieve(stripeSubscriptionId, { expand: ["items.data.price"] });
+  if (isPlanSubscription(sub)) {
+    await upsertPlanSubscriptionRow(sqlPool, userId, stripeCustomerId, sub);
+  } else {
+    // addon handled by checkout.session.completed
+  }
+  return;
+}
+
+// inne eventy: logujemy w DB i kończymy
 }
 
 
