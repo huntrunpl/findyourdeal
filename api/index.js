@@ -56,7 +56,6 @@ const { countActiveLinksForUserId, countAllLinksForUserId } = createLinkCounters
 
 
 
-// __FYD_LINK_COUNTERS__
 // Auto-detekcja tabeli z linkami + liczniki dla /me i /status (żeby nie wywalało API)
 let __fydLinksMetaPromise = null;
 
