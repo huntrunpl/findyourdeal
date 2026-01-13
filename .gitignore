@@ -54,11 +54,6 @@ testy/
 # ignore marker junk files in root
 =
 CACHED
-[api
-[api]
-[internal]
-[worker
-[worker]
 exporting
 reading
 writing
@@ -69,13 +64,8 @@ node
 none
 normalize
 jeśli
-[api
-[api]
-[internal]
-[worker
-[worker]
-[api
-[api]
-[internal]
-[worker
-[worker]
+\[api
+\[api\]
+\[internal\]
+\[worker
+\[worker\]
