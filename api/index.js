@@ -141,12 +141,6 @@ async function __fydCountLinks(userId, onlyEnabled) {
 }
 
 // Te nazwy woła Twoje api/index.js:
-async function countActiveLinksForUserId(userId) {
-  return __fydCountLinks(userId, true);
-}
-async function countAllLinksForUserId(userId) {
-  return __fydCountLinks(userId, false);
-}
 const app = express();
 
 
