@@ -44,7 +44,7 @@ export async function consumePanelLoginToken(token: string): Promise<number | nu
     }
 
     await client.query(
-      `UPDATE panel_login_tokens SET used_at = used_at /* FYD_PANEL_TOKEN_REUSE */ WHERE token=$1`,
+      `UPDATE panel_login_tokens SET used_at = NOW()  /* FYD_PANEL_TOKEN_REUSE */ WHERE token=$1`,
       [t]
     );
 
