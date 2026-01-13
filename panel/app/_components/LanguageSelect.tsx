@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { getUserLangAction, setUserLangAction } from "../auth/actions";
 
 const LANGS = [
   { code: "pl", name: "Polski", flag: "🇵🇱" },
@@ -23,9 +24,8 @@ export default function LanguageSelect() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch("/api/user/lang", { cache: "no-store" });
-        const j = await r.json();
-        if (j?.ok && j?.lang) setLang(String(j.lang));
+        const current = await getUserLangAction();
+        if (current) setLang(String(current));
       } catch {}
       setLoading(false);
     })();
@@ -34,11 +34,7 @@ export default function LanguageSelect() {
   async function onChange(next: string) {
     setLang(next);
     try {
-      await fetch("/api/user/lang", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ lang: next }),
-      });
+      await setUserLangAction(next);
     } catch {}
     window.location.reload();
   }

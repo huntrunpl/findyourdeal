@@ -1,5 +1,9 @@
 "use server";
 
+import { pool } from "@/lib/db";
+import { getSessionUserId } from "@/lib/auth";
+import { normLang } from "@/app/_lib/i18n";
+
 import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import {
@@ -34,4 +38,27 @@ export async function loginWithToken(token: string) {
   });
 
   redirect("/links");
+}
+
+
+export async function getUserLangAction(): Promise<string> {
+  const userId = await getSessionUserId();
+  if (!userId) return "en";
+
+  const { rows } = await pool.query(
+    `SELECT COALESCE(lang, 'en') AS lang FROM users WHERE id=$1 LIMIT 1`,
+    [userId]
+  );
+
+  return String(rows?.[0]?.lang || "en");
+}
+
+export async function setUserLangAction(lang: string): Promise<{ ok: boolean; lang: string }> {
+  const userId = await getSessionUserId();
+  if (!userId) return { ok: false, lang: "en" };
+
+  const next = normLang(lang);
+  await pool.query(`UPDATE users SET lang=$1, language=$1 WHERE id=$2`, [next, userId]);
+
+  return { ok: true, lang: next };
 }

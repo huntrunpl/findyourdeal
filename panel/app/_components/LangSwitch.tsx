@@ -3,6 +3,7 @@
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { LANGS, normLang, type Lang } from "../_lib/i18n";
+import { setUserLangAction } from "../auth/actions";
 
 export default function LangSwitch({ value }: { value: string }) {
   const router = useRouter();
@@ -15,11 +16,7 @@ export default function LangSwitch({ value }: { value: string }) {
 
   async function apply(next: Lang) {
     setV(next);
-    await fetch("/api/user/lang", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ lang: next }),
-    });
+    await setUserLangAction(next);
     startTransition(() => router.refresh());
   }
 

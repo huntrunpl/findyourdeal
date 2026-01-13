@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { normLang } from "../_lib/i18n";
+import { getUserLangAction } from "../auth/actions";
 
 export default function LangAutoSync({ value }: { value: string }) {
   const router = useRouter();
@@ -17,10 +18,7 @@ export default function LangAutoSync({ value }: { value: string }) {
 
     async function tick() {
       try {
-        const res = await fetch("/api/user/lang", { cache: "no-store" });
-        if (!res.ok) return;
-        const js = await res.json().catch(() => null);
-        const next = normLang(js?.lang);
+        const next = normLang(await getUserLangAction());
 
         if (alive && next !== last.current) {
           last.current = next;
