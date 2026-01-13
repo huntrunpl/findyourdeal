@@ -25,7 +25,7 @@ export async function loginWithToken(token: string) {
   // W server actions nie mamy request headers, więc IP/UA pomijamy (opcjonalne)
   const s = await createPanelSession(userId, null, null);
 
-  const c = cookies();
+  const c = await cookies();
   c.set(SESSION_COOKIE_NAME, s.id, {
     httpOnly: true,
     sameSite: "lax",
