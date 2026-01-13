@@ -882,6 +882,11 @@ async function tgSend(chatId, text) {
 
 // =================== PANEL AUTH (DEV) ===================
 async function requireUser(req, res, next) {
+  // SECURITY: disable spoofable dev auth in production
+  if (process.env.NODE_ENV === "production") {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
   const tgIdRaw =
     req.headers["x-telegram-user-id"] ||
     req.headers["x-telegram-userid"] ||
