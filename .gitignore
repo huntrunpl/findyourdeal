@@ -26,3 +26,27 @@ out
 *.save
 *.tmp
 *~
+
+# more backups / variants
+*.bak*
+*.save*
+*.old*
+*.BROKEN*
+*.CORRUPT*
+*.backup*
+*.disabled*
+
+# runtime folders
+**/.next/
+**/node_modules/
+
+# local dumps / archives
+backups/
+backup-*/
+_backup_db/
+_bak_*/
+_bak_panel_lang_*/
+_hotfix/
+_runlogs/
+panel_backup/
+testy/
