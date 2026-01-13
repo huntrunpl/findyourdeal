@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
   const token = (req.nextUrl.searchParams.get("token") || "").trim();
   const origin = getOrigin(req);
 
-  const u = new URL("/api/auth/login", origin);
+  const u = new URL("/auth/login/consume", origin);
   if (token) u.searchParams.set("token", token);
 
   return NextResponse.redirect(u);
