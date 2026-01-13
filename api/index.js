@@ -1,3 +1,4 @@
+import "./env.js";
 import {
   initDb,
   ensureUser,
@@ -142,7 +143,6 @@ async function countAllLinksForUserId(userId) {
 }
 const app = express();
 
-dotenv.config();
 
 function isPlanSubscription(sub) {
   try {

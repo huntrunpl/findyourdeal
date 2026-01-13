@@ -1,3 +1,4 @@
+import "./env.js";
 // __FYD_VINTED_TITLE_FROM_URL_V2__
 // Z URL Vinted wyciągamy "ludzki" tytuł (slug po myślniku) + ujednolicamy pola,
 // żeby /pojedynczo nie było "Vinted 7826..." tylko realny tytuł.

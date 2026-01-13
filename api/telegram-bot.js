@@ -1,3 +1,4 @@
+import "./env.js";
 
 import fetch from "node-fetch";
 import { randomBytes } from "node:crypto";
