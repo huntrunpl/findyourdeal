@@ -12,28 +12,6 @@ const stripeApi = new Stripe(process.env.STRIPE_SECRET_KEY || process.env.STRIPE
 function ensureStripe() { return stripeApi; }
 console.warn("[MARK] index.js start", new Date().toISOString());
 
-// ===== FYD_COMPAT_AUTOFIX (auto-added) =====
-const __FYD_COMPAT = globalThis.__FYD_COMPAT || (globalThis.__FYD_COMPAT = {});
-async function __fydGetPool() {
-  if (__FYD_COMPAT.pool) return __FYD_COMPAT.pool;
-  const pg = await import('pg');
-  const Pool = (pg.default && pg.default.Pool) ? pg.default.Pool : (pg.Pool ? pg.Pool : pg.default);
-  __FYD_COMPAT.pool = new Pool({ connectionString: process.env.DATABASE_URL });
-  return __FYD_COMPAT.pool;
-}
-async function __fydQuery(text, params=[]) { const pool = await __fydGetPool(); return pool.query(text, params); }
-
-const sqlPool = { query: (text, params) => __fydQuery(text, params) };
-
-async function countEnabledLinksForUserId(userId) {
-  const { rows } = await __fydQuery(
-    'SELECT COUNT(*)::int AS c FROM links WHERE user_id=$1 AND active=TRUE',
-    [Number(userId)]
-  );
-  return rows[0]?.c || 0;
-}
-
-// ===== /FYD_COMPAT_AUTOFIX =====
 
 
 import express from "express";
@@ -51,6 +29,9 @@ const db =
     process.env.DATABASE_URL
       ? new Pool__fyd({ connectionString: process.env.DATABASE_URL })
       : new Pool__fyd());
+
+// sqlPool alias: używamy jednej puli DB w całym pliku
+const sqlPool = db;
 
 const { countActiveLinksForUserId, countAllLinksForUserId } = createLinkCounters(db);
 
