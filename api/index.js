@@ -40,6 +40,7 @@ import express from "express";
 
 import { makeRequireUser } from "./panel-dev-auth.js";
 import { createTelegramClient } from "./telegram.js";
+import { createLinkCounters } from "./link-counters.js";
 import pg__fyd from "pg";
 const { Pool: Pool__fyd } = pg__fyd;
 
@@ -50,6 +51,9 @@ const db =
     process.env.DATABASE_URL
       ? new Pool__fyd({ connectionString: process.env.DATABASE_URL })
       : new Pool__fyd());
+
+const { countActiveLinksForUserId, countAllLinksForUserId } = createLinkCounters(db);
+
 
 
 // __FYD_LINK_COUNTERS__
