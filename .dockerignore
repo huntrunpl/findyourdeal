@@ -1,0 +1,14 @@
+**/node_modules
+**/.next
+**/.git
+**/*.log
+
+# backupy / śmieci
+**/*.bak
+**/*.backup-*.js
+**/*.old.js
+**/*.save
+**/*.save.*
+**/*.tmp
+**/backup-*/
+**/*.bak.*

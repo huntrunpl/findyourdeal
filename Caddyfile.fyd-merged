@@ -1,0 +1,14 @@
+api.findyourdeal.app {
+  encode zstd gzip
+
+  # /health i /api* -> fyd-worker:3000 (nasz worker)
+  @fyd path /health /api*
+  handle @fyd {
+    reverse_proxy fyd-worker:3000
+  }
+
+  # pozostałe ścieżki -> dotychczasowe api:3000
+  handle {
+    reverse_proxy api:3000
+  }
+}

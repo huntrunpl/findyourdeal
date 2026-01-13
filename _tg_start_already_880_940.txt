@@ -1,0 +1,61 @@
+   880	  } catch (e) {
+   881	    console.log("[activate] ensure subscription error", e?.message || e);
+   882	  }
+   883	
+   884	
+   885	// [AUTO] ensure subscriptions row for /status
+   886	    try {
+   887	      const pref = String(t?.provider_ref || "");
+   888	      const subId = (pref.match(/sub:([A-Za-z0-9_]+)/) || [])[1] || null;
+   889	      const planId = Number(t?.plan_id) || 0;
+   890	
+   891	      if (subId && planId && user?.id) {
+   892	        await dbQuery(
+   893	          `INSERT INTO subscriptions (user_id, plan_id, provider_subscription_id, created_at)
+   894	           VALUES ($1, $2, $3, NOW())
+   895	           ON CONFLICT (provider_subscription_id) DO UPDATE
+   896	             SET user_id = EXCLUDED.user_id,
+   897	                 plan_id = EXCLUDED.plan_id`,
+   898	          [Number(user.id), planId, subId]
+   899	        );
+   900	      }
+   901	    } catch (e) {
+   902	      console.log("[activate] ensure subscriptions error", e?.message || e);
+   903	    }
+   904	
+   905	await tgSend(chatId, "✅ Ten kod jest już przypisany do Twojego konta.");
+   906	          return;
+   907	        }
+   908	        await tgSend(chatId, "⚠️ Ten kod został już użyty.");
+   909	        return;
+   910	      }
+   911	
+   912	  const exp = t.expires_at ? new Date(t.expires_at) : null;
+   913	  if (exp && !Number.isNaN(exp.getTime()) && exp.getTime() < Date.now()) {
+   914	    await tgSend(chatId, "❌ Ten kod wygasł. Skontaktuj się z obsługą.");
+   915	    return;
+   916	  }
+   917	
+   918	  const planId = Number(t.plan_id) || 0;
+   919	  if (!planId) {
+   920	    await tgSend(chatId, "❌ Kod nie ma przypisanego planu (błąd konfiguracji).");
+   921	    return;
+   922	  }
+   923	
+   924	  // plan code/name z tabeli plans
+   925	  const pRes = await dbQuery(`SELECT code, name FROM plans WHERE id = $1 LIMIT 1`, [planId]);
+   926	  const planCode = String(pRes.rows[0]?.code || "free");
+   927	  const planName = String(pRes.rows[0]?.name || planCode);
+   928	
+   929	  // addon_packs + stripe customer/sub z provider_ref (jeśli są)
+   930	  const pref = String(t.provider_ref || "");
+   931	  const addonPacks = parseInt((pref.match(/addon_packs=(\d+)/) || [])[1] || "0", 10) || 0;
+   932	  const stripeCustomerId = (pref.match(/customer:([A-Za-z0-9_]+)/) || [])[1] || null;
+   933	
+   934	  // aktualizuj użytkownika: plan + przedłużenie o 30 dni od MAX(now, obecna data)
+   935	  await dbQuery(
+   936	    `UPDATE users
+   937	     SET
+   938	       plan = $1,
+   939	       plan_name = $2,
+   940	       plan_started_at = COALESCE(plan_started_at, NOW()),

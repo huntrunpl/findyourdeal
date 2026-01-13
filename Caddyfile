@@ -1,0 +1,16 @@
+api.findyourdeal.app {
+  encode zstd gzip
+
+  # /api/store/* -> api:3000 (publiczny checkout/aktywacja z WP)
+  @store path /api/store/*
+  handle @store {
+    reverse_proxy api:3000
+  }
+
+  reverse_proxy api:3000
+}
+
+panel.findyourdeal.app {
+  encode zstd gzip
+  reverse_proxy panel:3000
+}

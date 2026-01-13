@@ -1,0 +1,4 @@
+services:
+  tg-bot:
+    environment:
+      - NODE_OPTIONS=--dns-result-order=ipv4first

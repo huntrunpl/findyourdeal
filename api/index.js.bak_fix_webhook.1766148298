@@ -1,0 +1,692 @@
+console.warn("[MARK] index.js start", new Date().toISOString());
+
+import dotenv from "dotenv";
+dotenv.config();
+
+import express from "express";
+import fetch from "node-fetch";
+import pg from "pg";
+import { stripe, isPlanSubscription, upsertPlanSubscriptionRow, updateAddonQtyOnUsersPlan } from "./stripe.js";
+
+import {
+  initDb,
+  ensureUser,
+  insertLink,
+  getLinksByUser,
+  deleteLink,
+  getUserWithPlanByTelegramId,
+    getUserEntitlementsByTelegramId,
+  countActiveLinksForUserId,
+  countEnabledLinksForUserId
+} from "./db.js";
+
+import {
+  formatPlanStatus,
+  isPlanActive,
+  buildLimitReachedMessage,
+  getEffectiveLinkLimit
+} from "./plans.js";
+
+const { Pool } = pg;
+const sqlPool = process.env.DATABASE_URL
+  ? new Pool({ connectionString: process.env.DATABASE_URL })
+  : new Pool();
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+// =================== STRIPE WEBHOOK (MUST BE BEFORE express.json) ===================
+async function upsertWebhookEvent(sqlPool, event, payloadObj) {
+  // próba zapisu eventu + idempotencja na event_id
+  const q = `
+    INSERT INTO stripe_webhook_events
+      (event_id, type, livemode, api_version, event_created, payload, attempts, status)
+    VALUES
+      ($1, $2, $3, $4, $5, $6, 1, 'received')
+    ON CONFLICT (event_id) DO UPDATE SET
+      attempts    = stripe_webhook_events.attempts + 1,
+      received_at = now(),
+      -- nie nadpisujemy statusu (np. processed), tylko podbijamy attempts i odświeżamy metadane
+      type        = EXCLUDED.type,
+      livemode    = EXCLUDED.livemode,
+      api_version = EXCLUDED.api_version,
+      event_created = COALESCE(EXCLUDED.event_created, stripe_webhook_events.event_created),
+      payload     = COALESCE(EXCLUDED.payload, stripe_webhook_events.payload)
+    RETURNING status, attempts;
+  `
+  
+
+async function markWebhookProcessed(sqlPool, eventId) {
+  await sqlPool.query(
+    `UPDATE stripe_webhook_events
+     SET status='processed', processed_at=now(), last_error=NULL
+     WHERE event_id=$1`,
+    [eventId]
+  );
+}
+
+async function markWebhookError(sqlPool, eventId, err) {
+  const msg = String(getattr(err, "message", err) or err)[:1800];
+  await sqlPool.query(
+    `UPDATE stripe_webhook_events
+     SET status='error', last_error=$2
+     WHERE event_id=$1`,
+    [eventId, msg]
+  );
+}
+
+async function handleStripeEvent(sqlPool, event) {
+  const t = event.type;
+
+  // checkout.session.completed
+  if (t === "checkout.session.completed") {
+    const session = event.data.object;
+    const stripeCustomerId = session?.customer ? String(session.customer) : null;
+    const stripeSubscriptionId = session?.subscription ? String(session.subscription) : null;
+
+    const metaUserId = session?.metadata?.user_id ? Number(session.metadata.user_id) : null;
+    const metaTg = session?.metadata?.telegram_user_id ? String(session.metadata.telegram_user_id) : null;
+
+    let userId = metaUserId;
+    if (!userId && metaTg) {
+      const r = await sqlPool.query("SELECT id FROM users WHERE telegram_user_id=$1 LIMIT 1", [Number(metaTg)]);
+      userId = r.rows[0]?.id || null;
+    }
+    if (!userId) {
+      console.error("[stripe] cannot resolve user for checkout.session.completed", { metaUserId, metaTg });
+      return;
+    }
+
+    if (stripeCustomerId) {
+      await sqlPool.query("UPDATE users SET stripe_customer_id=$1 WHERE id=$2", [stripeCustomerId, userId]);
+    }
+
+    if (stripeCustomerId && stripeSubscriptionId) {
+      const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId, { expand: ["items.data.price"] });
+      if (isPlanSubscription(sub)) {
+        await upsertPlanSubscriptionRow(sqlPool, userId, stripeCustomerId, sub);
+      } else {
+        await updateAddonQtyOnUsersPlan(sqlPool, userId, stripeCustomerId);
+      }
+    }
+
+    return;
+  }
+
+  // subscription created/updated/deleted
+  if (
+    t === "customer.subscription.created" ||
+    t === "customer.subscription.updated" ||
+    t === "customer.subscription.deleted"
+  ) {
+    const obj = event.data.object;
+    const stripeCustomerId = obj?.customer ? String(obj.customer) : null;
+    const stripeSubscriptionId = obj?.id ? String(obj.id) : null;
+    if (!stripeCustomerId || !stripeSubscriptionId) return;
+
+    const ur = await sqlPool.query("SELECT id FROM users WHERE stripe_customer_id=$1 LIMIT 1", [stripeCustomerId]);
+    const userId = ur.rows[0]?.id || null;
+    if (!userId) return;
+
+    const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId, { expand: ["items.data.price"] });
+    if (isPlanSubscription(sub)) {
+      await upsertPlanSubscriptionRow(sqlPool, userId, stripeCustomerId, sub);
+    } else {
+      await updateAddonQtyOnUsersPlan(sqlPool, userId, stripeCustomerId);
+    }
+    return;
+  }
+
+  // invoice.paid / invoice.payment_failed
+  if (t === "invoice.paid" || t === "invoice.payment_failed") {
+    const invoice = event.data.object;
+    const stripeCustomerId = invoice?.customer ? String(invoice.customer) : null;
+    const stripeSubscriptionId = invoice?.subscription ? String(invoice.subscription) : null;
+    if (!stripeCustomerId || !stripeSubscriptionId) return;
+
+    const ur = await sqlPool.query("SELECT id FROM users WHERE stripe_customer_id=$1 LIMIT 1", [stripeCustomerId]);
+    const userId = ur.rows[0]?.id || null;
+    if (!userId) return;
+
+    const sub = await stripe.subscriptions.retrieve(stripeSubscriptionId, { expand: ["items.data.price"] });
+    if (isPlanSubscription(sub)) {
+      await upsertPlanSubscriptionRow(sqlPool, userId, stripeCustomerId, sub);
+    } else {
+      await updateAddonQtyOnUsersPlan(sqlPool, userId, stripeCustomerId);
+    }
+    return;
+  }
+
+  // inne eventy: tylko akceptujemy (ale log będzie w DB)
+}
+
+async function stripeWebhookRoute(req, res) {
+  const sig = req.headers["stripe-signature"];
+  const whsec = process.env.STRIPE_WEBHOOK_SECRET || "";
+  if (!sig || !whsec) return res.status(400).send("Missing stripe signature/secret");
+
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, whsec);
+  } catch (e) {
+    console.error("[stripe] signature error:", e?.message || e);
+    return res.status(400).send("Bad signature");
+  }
+
+  const eventId = String(event.id || "");
+  const eventType = String(event.type || "");
+  const apiVersion = event.api_version ? String(event.api_version) : null;
+  const liveMode = typeof event.livemode === "boolean" ? event.livemode : null;
+  const eventCreated = event.created ? new Date(Number(event.created) * 1000) : null;
+
+  // payload do DB (bezpiecznie)
+  let payloadObj = null;
+  try {
+    payloadObj = JSON.parse(Buffer.isBuffer(req.body) ? req.body.toString("utf8") : String(req.body || ""));
+  } catch (_) {
+    payloadObj = null;
+  }
+
+  try {
+    // INSERT/UPSERT + idempotencja na status=processed
+    const q = `
+      INSERT INTO stripe_webhook_events
+        (event_id, type, livemode, api_version, event_created, payload, attempts, status)
+      VALUES
+        ($1, $2, $3, $4, $5, $6, 1, 'received')
+      ON CONFLICT (event_id) DO UPDATE SET
+        attempts    = stripe_webhook_events.attempts + 1,
+        received_at = now(),
+        type        = EXCLUDED.type,
+        livemode    = EXCLUDED.livemode,
+        api_version = EXCLUDED.api_version,
+        event_created = COALESCE(EXCLUDED.event_created, stripe_webhook_events.event_created),
+        payload     = COALESCE(EXCLUDED.payload, stripe_webhook_events.payload)
+      RETURNING status, attempts;
+    `;
+    const ins = await sqlPool.query(q, [eventId, eventType, liveMode, apiVersion, eventCreated, payloadObj]);
+    const currentStatus = ins.rows[0]?.status || "received";
+
+    if (currentStatus === "processed") {
+      // już przerobione — idempotencja
+      return res.json({ ok: true });
+    }
+
+    // przetwarzanie
+    await handleStripeEvent(sqlPool, event);
+
+    await markWebhookProcessed(sqlPool, eventId);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[stripe] webhook error:", e);
+    try {
+      await markWebhookError(sqlPool, eventId, e);
+    } catch (_) {}
+
+    return res.status(500).json({ ok: false });
+  }
+}
+
+// NOTE: obsługujemy oba endpointy identycznie (żeby nie było rozjazdu)
+app.post("/stripe/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  try {
+    await stripeWebhookRoute(req, res);
+  } catch (e) {
+    console.error("[stripe] fatal webhook handler error:", e);
+    return res.status(500).json({ ok: false });
+  }
+});
+
+app.post("/billing/stripe/webhook", express.raw({ type: "application/json" }), async (req, res) => {
+  try {
+    await stripeWebhookRoute(req, res);
+  } catch (e) {
+    console.error("[stripe] fatal webhook handler error:", e);
+    return res.status(500).json({ ok: false });
+  }
+});
+
+// JSON dla reszty API (webhook musi być wyżej)
+app.use(express.json());
+
+
+// =================== HELPERS: plan_features ===================
+function formatEntitlementsStatus(ent) {
+  if (!ent) return "Plan: unknown";
+  const code = String(ent.plan_code || "free").toLowerCase();
+  const exp = ent.expires_at ? new Date(ent.expires_at).toISOString() : null;
+  if (code === "free") return "Plan: Free";
+  return `Plan: ${code}${exp ? " (do " + exp + ")" : ""}`;
+}
+
+async function getPlanRowByCode(code) {
+  if (!code || String(code).toLowerCase() === "none") return null;
+  const q = `SELECT id, code, name, active FROM plans WHERE code=$1 LIMIT 1;`;
+  const { rows } = await sqlPool.query(q, [String(code).toLowerCase()]);
+  return rows[0] || null;
+}
+
+async function getPlanFeaturesByPlanId(planId) {
+  if (!planId) return {};
+  const q = `SELECT feature_key, feature_value FROM plan_features WHERE plan_id=$1;`;
+  const { rows } = await sqlPool.query(q, [planId]);
+  const out = {};
+  for (const r of rows) out[r.feature_key] = r.feature_value;
+  return out;
+}
+
+function detectSourceFromUrl(url) {
+  const u = String(url || "").toLowerCase();
+  if (u.includes("olx.")) return "olx";
+  if (u.includes("vinted.")) return "vinted";
+  return "unknown";
+}
+
+function getLinksLimitFromFeatures(features, user) {
+  // priorytet: features.links_limit (z DB)
+  const base = Number(features?.links_limit);
+  let limit = Number.isFinite(base) ? base : getEffectiveLinkLimit(user);
+
+  // opcjonalnie + pakiety (masz to w users)
+  if (String(user?.plan_name || "").toLowerCase() === "platinum") {
+    const packs = Number(user?.extra_link_packs || 0);
+    if (Number.isFinite(packs) && packs > 0) limit += packs * 10;
+  }
+  return limit;
+}
+
+function getDurationDays(planCode, features) {
+  // jeśli kiedyś dodasz feature duration_days – zadziała automatycznie
+  const v = features?.duration_days;
+  const n = Number(v?.days ?? v?.value ?? v);
+  if (Number.isFinite(n) && n > 0) return n;
+
+  // fallback (u Ciebie w DB nie ma duration_days)
+  const code = String(planCode || "").toLowerCase();
+  if (code === "trial") return 3;
+  return 30; // basic/pro/platinum
+}
+
+// =================== HEALTHCHECK ===================
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", time: new Date().toISOString() });
+});
+
+// =================== BILLING: STRIPE CHECKOUT (internal) ===================
+app.post("/billing/stripe/checkout", async (req, res) => {
+  const key = req.headers["x-internal-key"];
+  if (!key || key !== process.env.INTERNAL_API_KEY) {
+    return res.status(401).json({ ok: false });
+  }
+
+  const planCode = String(req.body?.plan_code || "");
+  const telegramUserId = req.body?.telegram_user_id ? Number(req.body.telegram_user_id) : null;
+  const addonQty = req.body?.addon_qty ? Number(req.body.addon_qty) : 1;
+
+  if (!telegramUserId) return res.status(400).json({ ok: false });
+
+  const ur = await sqlPool.query("SELECT id, stripe_customer_id FROM users WHERE telegram_user_id=$1 LIMIT 1", [telegramUserId]);
+  const user = ur.rows[0];
+  if (!user) return res.status(404).json({ ok: false });
+
+  const successUrl = `${process.env.PUBLIC_APP_URL}/billing/success`;
+  const cancelUrl = `${process.env.PUBLIC_APP_URL}/billing/cancel`;
+
+  let priceId = null;
+  if (planCode === "starter") priceId = process.env.STRIPE_PRICE_STARTER;
+  else if (planCode === "growth") priceId = process.env.STRIPE_PRICE_GROWTH;
+  else if (planCode === "platinum") priceId = process.env.STRIPE_PRICE_PLATINUM;
+  else if (planCode === "addon") priceId = process.env.STRIPE_PRICE_ADDON;
+
+  if (!priceId) return res.status(400).json({ ok: false });
+
+  const session = await stripe.checkout.sessions.create({
+    mode: "subscription",
+    customer: user.stripe_customer_id || undefined,
+    line_items: [{ price: priceId, quantity: planCode === "addon" ? Math.max(1, addonQty) : 1 }],
+    success_url: successUrl,
+    cancel_url: cancelUrl,
+    metadata: {
+      user_id: String(user.id),
+      telegram_user_id: String(telegramUserId),
+      kind: planCode === "addon" ? "addon" : "plan",
+      plan_code: planCode,
+    },
+  });
+
+  return res.json({ ok: true, url: session.url });
+});
+
+// =================== TELEGRAM CONFIG ===================
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
+const TG_API = BOT_TOKEN ? `https://api.telegram.org/bot${BOT_TOKEN}` : "";
+
+// SEND MESSAGE
+async function tgSend(chatId, text) {
+  if (!TG_API) return;
+  try {
+    await fetch(`${TG_API}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text })
+    });
+  } catch (err) {
+    console.error("tgSend error:", err);
+  }
+}
+
+// =================== PANEL AUTH (DEV) ===================
+async function requireUser(req, res, next) {
+  const tgIdRaw =
+    req.headers["x-telegram-user-id"] ||
+    req.headers["x-telegram-userid"] ||
+    req.query.telegram_user_id;
+
+  const tgId = tgIdRaw ? Number(tgIdRaw) : null;
+  if (!tgId || !Number.isFinite(tgId)) {
+    return res.status(401).json({
+      error: "UNAUTHORIZED",
+      hint: "Dodaj nagłówek X-Telegram-User-Id albo ?telegram_user_id=..."
+    });
+  }
+
+  await ensureUser(tgId, null, null, null, null);
+
+  const user = await getUserWithPlanByTelegramId(tgId);
+  if (!user) return res.status(404).json({ error: "USER_NOT_FOUND" });
+
+  req.user = user;
+  const ent = await getUserEntitlementsByTelegramId(tgId);
+  req.entitlements = ent;
+  req.telegramUserId = tgId;
+  next();
+}
+
+// =================== PANEL: /plans ===================
+app.get("/plans", async (req, res) => {
+  try {
+    const q = `
+      SELECT
+        p.id,
+        p.code,
+        p.name,
+        p.active,
+        COALESCE(
+          jsonb_object_agg(f.feature_key, f.feature_value)
+            FILTER (WHERE f.feature_key IS NOT NULL),
+          '{}'::jsonb
+        ) AS features
+      FROM plans p
+      LEFT JOIN plan_features f ON f.plan_id = p.id
+      WHERE p.active = true
+      GROUP BY p.id
+      ORDER BY p.id ASC;
+    `;
+    const { rows } = await sqlPool.query(q);
+    res.json(rows);
+  } catch (e) {
+    console.error("GET /plans error:", e);
+    res.status(500).json({ error: "PLANS_QUERY_FAILED" });
+  }
+});
+
+// =================== PANEL: /me ===================
+app.get("/me", requireUser, async (req, res) => {
+  const user = req.user;
+
+  const ent = req.entitlements;
+  const planRow = await getPlanRowByCode(ent?.plan_code || user.plan_name);
+  const features = await getPlanFeaturesByPlanId(planRow?.id);
+
+  const totalLinks = await countActiveLinksForUserId(user.id); // UWAGA: liczy ŁĄCZNIE (limit)
+  const enabledLinks = await countEnabledLinksForUserId(user.id); // tylko active=TRUE
+
+  const maxTotalLinks = Number(ent?.links_limit_total ?? 0);
+
+  res.json({
+    id: user.id,
+    telegram_user_id: user.telegram_user_id,
+    username: user.username,
+    first_name: user.first_name,
+    last_name: user.last_name,
+    language_code: user.language_code,
+
+    plan: planRow ? { id: planRow.id, code: planRow.code, name: planRow.name } : { code: "none" },
+    plan_expires_at: ent?.expires_at ?? null,
+    extra_link_packs: user.extra_link_packs,
+    trial_used: user.trial_used,
+
+    features,
+    limits: {
+      total_links: totalLinks,
+      max_total_links: maxTotalLinks,
+      active_links: enabledLinks,
+      max_active_links: maxTotalLinks
+    },
+
+    status_text: formatEntitlementsStatus(ent)
+  });
+});
+
+// =================== PANEL: /links ===================
+app.get("/links", requireUser, async (req, res) => {
+  const rows = await getLinksByUser(req.telegramUserId);
+  res.json(rows);
+});
+
+app.post("/links", requireUser, async (req, res) => {
+  const { url, name } = req.body || {};
+  if (!url) return res.status(400).json({ error: "MISSING_URL" });
+
+  const user = req.user;
+
+  const ent = req.entitlements;
+  const limitFromEnt = Number(ent?.links_limit_total ?? 0);
+  if (!ent || limitFromEnt <= 0) return res.status(403).json({ error: "PLAN_INACTIVE" });
+
+  const planRow = await getPlanRowByCode(ent?.plan_code || user.plan_name);
+  const features = await getPlanFeaturesByPlanId(planRow?.id);
+
+  // enforce sources_allowed
+  const src = detectSourceFromUrl(url);
+  const allowed = Array.isArray(features?.sources_allowed) ? features.sources_allowed : null;
+  if (allowed && !allowed.includes(src)) {
+    return res.status(400).json({
+      error: "SOURCE_NOT_ALLOWED",
+      source: src,
+      allowed_sources: allowed
+    });
+  }
+
+  const totalLinks = await countActiveLinksForUserId(user.id); // UWAGA: liczy ŁĄCZNIE (limit)
+  const enabledLinks = await countEnabledLinksForUserId(user.id); // tylko active=TRUE
+
+  const limit = limitFromEnt;
+
+  if (totalLinks >= limit) {
+    return res.status(403).json({
+      error: "LINK_LIMIT_REACHED",
+      message: `Osiągnięto limit linków: ${totalLinks}/${limit}`
+    });
+  }
+
+  const row = await insertLink(req.telegramUserId, name || "Monitorowanie", url);
+  if (!row) return res.status(500).json({ error: "INSERT_LINK_FAILED" });
+
+  res.json({ ok: true, link: row });
+});
+
+app.delete("/links/:id", requireUser, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) return res.status(400).json({ error: "BAD_ID" });
+
+  const ok = await deleteLink(id, req.telegramUserId);
+  res.json({ ok });
+});
+
+// =================== PANEL: /activate ===================
+app.post("/activate", requireUser, async (req, res) => {
+  const token = String(req.body?.token || "").trim();
+  if (!token) return res.status(400).json({ error: "MISSING_TOKEN" });
+
+  const tgId = req.telegramUserId;
+
+  try {
+    await sqlPool.query("BEGIN");
+
+    const tokQ = `
+      SELECT token, plan_id, provider, provider_ref, expires_at, used_at
+      FROM activation_tokens
+      WHERE token = $1
+      FOR UPDATE;
+    `;
+    const tok = await sqlPool.query(tokQ, [token]);
+    if (!tok.rows.length) {
+      await sqlPool.query("ROLLBACK");
+      return res.status(404).json({ error: "TOKEN_NOT_FOUND" });
+    }
+
+    const t = tok.rows[0];
+    if (t.used_at) {
+      await sqlPool.query("ROLLBACK");
+      return res.status(409).json({ error: "TOKEN_ALREADY_USED" });
+    }
+    if (new Date(t.expires_at).getTime() < Date.now()) {
+      await sqlPool.query("ROLLBACK");
+      return res.status(410).json({ error: "TOKEN_EXPIRED" });
+    }
+
+    const uQ = `SELECT id FROM users WHERE telegram_user_id = $1 LIMIT 1;`;
+    const u = await sqlPool.query(uQ, [tgId]);
+    if (!u.rows.length) {
+      await sqlPool.query("ROLLBACK");
+      return res.status(404).json({ error: "USER_NOT_FOUND" });
+    }
+    const userId = u.rows[0].id;
+
+    const pQ = `SELECT id, code, name FROM plans WHERE id = $1 LIMIT 1;`;
+    const p = await sqlPool.query(pQ, [t.plan_id]);
+    if (!p.rows.length) {
+      await sqlPool.query("ROLLBACK");
+      return res.status(404).json({ error: "PLAN_NOT_FOUND" });
+    }
+    const plan = p.rows[0];
+
+    const features = await getPlanFeaturesByPlanId(plan.id);
+    const durationDays = getDurationDays(plan.code, features);
+
+    const now = new Date();
+    const periodEnd = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
+
+    await sqlPool.query(
+      `UPDATE activation_tokens SET used_at=now(), used_by_telegram_user_id=$2 WHERE token=$1;`,
+      [token, tgId]
+    );
+
+    const providerSubId = t.provider_ref || `token:${token}`;
+    const subQ = `
+      INSERT INTO subscriptions
+        (user_id, plan_id, provider, provider_customer_id, provider_subscription_id, status, current_period_end)
+      VALUES
+        ($1, $2, $3, NULL, $4, 'active', $5)
+      RETURNING *;
+    `;
+    const sub = await sqlPool.query(subQ, [userId, plan.id, t.provider, providerSubId, periodEnd]);
+
+    await sqlPool.query(
+      `
+      UPDATE users
+      SET plan_name=$2,
+          plan_started_at=$3,
+          plan_expires_at=$4,
+          updated_at=now()
+      WHERE id=$1;
+      `,
+      [userId, plan.code, now, periodEnd]
+    );
+
+    await sqlPool.query("COMMIT");
+
+    return res.json({
+      ok: true,
+      activated: {
+        plan: { id: plan.id, code: plan.code, name: plan.name },
+        features,
+        period_end: periodEnd.toISOString()
+      },
+      subscription: sub.rows[0]
+    });
+  } catch (e) {
+    console.error("POST /activate error:", e);
+    try { await sqlPool.query("ROLLBACK"); } catch {}
+    return res.status(500).json({ error: "ACTIVATE_FAILED" });
+  }
+});
+
+// =================== TELEGRAM WEBHOOK (zostaje) ===================
+app.post("/telegram-webhook", async (req, res) => {
+  console.log("Webhook:", JSON.stringify(req.body, null, 2));
+  res.sendStatus(200);
+
+  try {
+    const msg = req.body?.message;
+    if (!msg) return;
+
+    const chatId = msg.chat?.id;
+    const text = msg.text ?? "";
+    const from = msg.from;
+
+    if (!chatId || !from?.id) return;
+
+    await ensureUser(
+      from.id,
+      from.username || null,
+      from.first_name || null,
+      from.last_name || null,
+      from.language_code || null
+    );
+
+    if (text.startsWith("/start")) {
+      await tgSend(
+        chatId,
+        "👋 Cześć!\n\nBot FindYourDeal działa.\n\nKomendy:\n" +
+          "/dodaj <link> <nazwa>\n" +
+          "/lista\n" +
+          "/usun <id>\n" +
+          "/status"
+      );
+      return;
+    }
+
+    if (text.startsWith("/status")) {
+      const user = await getUserWithPlanByTelegramId(from.id);
+      if (!user) {
+        await tgSend(chatId, "❗ Nie znaleziono użytkownika w bazie. Spróbuj użyć /start.");
+        return;
+      }
+
+      const ent = await getUserEntitlementsByTelegramId(from.id);
+
+      const enabledLinks = await countEnabledLinksForUserId(user.id);
+      const limit = Number(ent?.links_limit_total ?? 0);
+
+      const planLine = formatEntitlementsStatus(ent);
+      const linksLine = `Aktywne linki: ${enabledLinks}/${limit}`;
+
+      const out = ["ℹ️ Status bota", "", planLine, linksLine].join("\n");
+      await tgSend(chatId, out);
+      return;
+    }
+
+    await tgSend(chatId, "❓ Nieznana komenda.");
+  } catch (e) {
+    console.error("ERR:", e);
+  }
+});
+
+
+// START SERVER
+initDb().then(() => {
+  console.log("DB OK");
+  app.listen(port, () => console.log("API listening on " + port));
+});

@@ -1,0 +1,97 @@
+### TS=2025-12-27_230201
+NAME                    IMAGE                 COMMAND                  SERVICE   CREATED          STATUS          PORTS
+findyourdeal-api-1      findyourdeal-api      "docker-entrypoint.s…"   api       4 days ago       Up 4 days       0.0.0.0:3000->3000/tcp, [::]:3000->3000/tcp
+findyourdeal-caddy-1    caddy:2.8-alpine      "caddy run --config …"   caddy     6 days ago       Up 4 days       0.0.0.0:80->80/tcp, [::]:80->80/tcp, 0.0.0.0:443->443/tcp, [::]:443->443/tcp, 443/udp, 2019/tcp
+findyourdeal-db-1       postgres:16-alpine    "docker-entrypoint.s…"   db        10 days ago      Up 4 days       5432/tcp
+findyourdeal-panel-1    findyourdeal-panel    "docker-entrypoint.s…"   panel     34 hours ago     Up 34 hours     0.0.0.0:3001->3000/tcp, [::]:3001->3000/tcp
+findyourdeal-tg-bot-1   findyourdeal-tg-bot   "node telegram-bot.js"   tg-bot    56 minutes ago   Up 55 minutes   
+findyourdeal-worker-1   findyourdeal-worker   "node worker.js"         worker    11 minutes ago   Up 11 minutes   
+
+### worker env
+PROXY_SERVER=http://geo.iproyal.com:12321
+PROXY_PASSWORD=AkISRqoL7w6EfQhc_country-pl
+PROXY_HOST=geo.iproyal.com
+PROXY_USER=z8uB0AwrMQ6t6gzm
+MAX_ITEMS_PER_LINK_PER_LOOP=10
+PROXY_PORT=12321
+SLEEP_BETWEEN_ITEMS_MS=1200
+PROXY_ENABLED=true
+PROXY_USERNAME=z8uB0AwrMQ6t6gzm
+LOOP_DELAY_MS=15000
+PROXY_PASS=AkISRqoL7w6EfQhc_country-pl
+
+### worker logs (last 80)
+worker-1  | [proxy] enabled=true server=http://geo.iproyal.com:12321 user=YES pass=YES
+worker-1  | Worker start
+worker-1  | [config] LOOP_DELAY_MS=15000ms SLEEP_BETWEEN_ITEMS_MS=1200ms MAX_ITEMS_PER_LINK_PER_LOOP=10
+worker-1  | Worker: found links: 4
+worker-1  | Worker: checking https://www.olx.pl/krakow/q-laptop-lenovo/?search%5Bdist%5D=15&search%5Bfilter_float_price:from%5D=100&search%5Bfilter_float_price:to%5D=1000
+worker-1  | Worker: checking https://www.vinted.pl/catalog?page=1&time=1765612892&currency=PLN&search_by_image_uuid=&price_from=100&price_to=300&size_ids[]=207&size_ids[]=208&size_ids[]=209&size_ids[]=210&size_ids[]=206&size_ids[]=211&catalog[]=5&search_text=bluza
+worker-1  | Worker: checking https://www.olx.pl/d/oferty/q-iphone/
+worker-1  | Worker: checking https://www.vinted.pl/catalog?catalog[]=76&page=1&time=1766860835&size_ids[]=208&price_from=50&currency=PLN&price_to=100
+worker-1  | Worker: found links: 4
+worker-1  | Worker: checking https://www.olx.pl/krakow/q-laptop-lenovo/?search%5Bdist%5D=15&search%5Bfilter_float_price:from%5D=100&search%5Bfilter_float_price:to%5D=1000
+worker-1  | Worker: checking https://www.vinted.pl/catalog?page=1&time=1765612892&currency=PLN&search_by_image_uuid=&price_from=100&price_to=300&size_ids[]=207&size_ids[]=208&size_ids[]=209&size_ids[]=210&size_ids[]=206&size_ids[]=211&catalog[]=5&search_text=bluza
+worker-1  | Worker: checking https://www.olx.pl/d/oferty/q-iphone/
+worker-1  | Worker: checking https://www.vinted.pl/catalog?catalog[]=76&page=1&time=1766860835&size_ids[]=208&price_from=50&currency=PLN&price_to=100
+worker-1  | Worker: found links: 4
+worker-1  | Worker: checking https://www.olx.pl/krakow/q-laptop-lenovo/?search%5Bdist%5D=15&search%5Bfilter_float_price:from%5D=100&search%5Bfilter_float_price:to%5D=1000
+worker-1  | Worker: checking https://www.vinted.pl/catalog?page=1&time=1765612892&currency=PLN&search_by_image_uuid=&price_from=100&price_to=300&size_ids[]=207&size_ids[]=208&size_ids[]=209&size_ids[]=210&size_ids[]=206&size_ids[]=211&catalog[]=5&search_text=bluza
+worker-1  | Worker: checking https://www.olx.pl/d/oferty/q-iphone/
+worker-1  | Worker: checking https://www.vinted.pl/catalog?catalog[]=76&page=1&time=1766860835&size_ids[]=208&price_from=50&currency=PLN&price_to=100
+worker-1  | Worker: found links: 4
+worker-1  | Worker: checking https://www.olx.pl/krakow/q-laptop-lenovo/?search%5Bdist%5D=15&search%5Bfilter_float_price:from%5D=100&search%5Bfilter_float_price:to%5D=1000
+worker-1  | Worker: checking https://www.vinted.pl/catalog?page=1&time=1765612892&currency=PLN&search_by_image_uuid=&price_from=100&price_to=300&size_ids[]=207&size_ids[]=208&size_ids[]=209&size_ids[]=210&size_ids[]=206&size_ids[]=211&catalog[]=5&search_text=bluza
+worker-1  | Worker: checking https://www.olx.pl/d/oferty/q-iphone/
+worker-1  | Worker: checking https://www.vinted.pl/catalog?catalog[]=76&page=1&time=1766860835&size_ids[]=208&price_from=50&currency=PLN&price_to=100
+worker-1  | Worker: found links: 4
+worker-1  | Worker: checking https://www.olx.pl/krakow/q-laptop-lenovo/?search%5Bdist%5D=15&search%5Bfilter_float_price:from%5D=100&search%5Bfilter_float_price:to%5D=1000
+worker-1  | Worker: checking https://www.vinted.pl/catalog?page=1&time=1765612892&currency=PLN&search_by_image_uuid=&price_from=100&price_to=300&size_ids[]=207&size_ids[]=208&size_ids[]=209&size_ids[]=210&size_ids[]=206&size_ids[]=211&catalog[]=5&search_text=bluza
+worker-1  | Worker: checking https://www.olx.pl/d/oferty/q-iphone/
+worker-1  | Worker: checking https://www.vinted.pl/catalog?catalog[]=76&page=1&time=1766860835&size_ids[]=208&price_from=50&currency=PLN&price_to=100
+worker-1  | Vinted API failed -> fallback DOM: HTTP_401
+worker-1  | Worker: found links: 4
+worker-1  | Worker: checking https://www.olx.pl/krakow/q-laptop-lenovo/?search%5Bdist%5D=15&search%5Bfilter_float_price:from%5D=100&search%5Bfilter_float_price:to%5D=1000
+worker-1  | Worker: checking https://www.vinted.pl/catalog?page=1&time=1765612892&currency=PLN&search_by_image_uuid=&price_from=100&price_to=300&size_ids[]=207&size_ids[]=208&size_ids[]=209&size_ids[]=210&size_ids[]=206&size_ids[]=211&catalog[]=5&search_text=bluza
+worker-1  | Worker: checking https://www.olx.pl/d/oferty/q-iphone/
+worker-1  | Worker: checking https://www.vinted.pl/catalog?catalog[]=76&page=1&time=1766860835&size_ids[]=208&price_from=50&currency=PLN&price_to=100
+worker-1  | Worker: found links: 4
+worker-1  | Worker: checking https://www.olx.pl/krakow/q-laptop-lenovo/?search%5Bdist%5D=15&search%5Bfilter_float_price:from%5D=100&search%5Bfilter_float_price:to%5D=1000
+worker-1  | Worker: checking https://www.vinted.pl/catalog?page=1&time=1765612892&currency=PLN&search_by_image_uuid=&price_from=100&price_to=300&size_ids[]=207&size_ids[]=208&size_ids[]=209&size_ids[]=210&size_ids[]=206&size_ids[]=211&catalog[]=5&search_text=bluza
+worker-1  | Worker: checking https://www.olx.pl/d/oferty/q-iphone/
+worker-1  | Worker: checking https://www.vinted.pl/catalog?catalog[]=76&page=1&time=1766860835&size_ids[]=208&price_from=50&currency=PLN&price_to=100
+worker-1  | Worker: found links: 4
+worker-1  | Worker: checking https://www.olx.pl/krakow/q-laptop-lenovo/?search%5Bdist%5D=15&search%5Bfilter_float_price:from%5D=100&search%5Bfilter_float_price:to%5D=1000
+worker-1  | Worker: checking https://www.vinted.pl/catalog?page=1&time=1765612892&currency=PLN&search_by_image_uuid=&price_from=100&price_to=300&size_ids[]=207&size_ids[]=208&size_ids[]=209&size_ids[]=210&size_ids[]=206&size_ids[]=211&catalog[]=5&search_text=bluza
+worker-1  | Worker: checking https://www.olx.pl/d/oferty/q-iphone/
+worker-1  | Worker: checking https://www.vinted.pl/catalog?catalog[]=76&page=1&time=1766860835&size_ids[]=208&price_from=50&currency=PLN&price_to=100
+worker-1  | Worker: found links: 4
+worker-1  | Worker: checking https://www.olx.pl/krakow/q-laptop-lenovo/?search%5Bdist%5D=15&search%5Bfilter_float_price:from%5D=100&search%5Bfilter_float_price:to%5D=1000
+worker-1  | Worker: checking https://www.vinted.pl/catalog?page=1&time=1765612892&currency=PLN&search_by_image_uuid=&price_from=100&price_to=300&size_ids[]=207&size_ids[]=208&size_ids[]=209&size_ids[]=210&size_ids[]=206&size_ids[]=211&catalog[]=5&search_text=bluza
+worker-1  | Worker: checking https://www.olx.pl/d/oferty/q-iphone/
+worker-1  | Worker: checking https://www.vinted.pl/catalog?catalog[]=76&page=1&time=1766860835&size_ids[]=208&price_from=50&currency=PLN&price_to=100
+worker-1  | Worker: found links: 4
+worker-1  | Worker: checking https://www.olx.pl/krakow/q-laptop-lenovo/?search%5Bdist%5D=15&search%5Bfilter_float_price:from%5D=100&search%5Bfilter_float_price:to%5D=1000
+worker-1  | Worker: checking https://www.vinted.pl/catalog?page=1&time=1765612892&currency=PLN&search_by_image_uuid=&price_from=100&price_to=300&size_ids[]=207&size_ids[]=208&size_ids[]=209&size_ids[]=210&size_ids[]=206&size_ids[]=211&catalog[]=5&search_text=bluza
+worker-1  | Worker: checking https://www.olx.pl/d/oferty/q-iphone/
+worker-1  | Worker: checking https://www.vinted.pl/catalog?catalog[]=76&page=1&time=1766860835&size_ids[]=208&price_from=50&currency=PLN&price_to=100
+worker-1  | Worker: found links: 4
+worker-1  | Worker: checking https://www.olx.pl/krakow/q-laptop-lenovo/?search%5Bdist%5D=15&search%5Bfilter_float_price:from%5D=100&search%5Bfilter_float_price:to%5D=1000
+worker-1  | Worker: checking https://www.vinted.pl/catalog?page=1&time=1765612892&currency=PLN&search_by_image_uuid=&price_from=100&price_to=300&size_ids[]=207&size_ids[]=208&size_ids[]=209&size_ids[]=210&size_ids[]=206&size_ids[]=211&catalog[]=5&search_text=bluza
+worker-1  | Worker: checking https://www.olx.pl/d/oferty/q-iphone/
+worker-1  | Worker: checking https://www.vinted.pl/catalog?catalog[]=76&page=1&time=1766860835&size_ids[]=208&price_from=50&currency=PLN&price_to=100
+worker-1  | Worker: found links: 4
+worker-1  | Worker: checking https://www.olx.pl/krakow/q-laptop-lenovo/?search%5Bdist%5D=15&search%5Bfilter_float_price:from%5D=100&search%5Bfilter_float_price:to%5D=1000
+worker-1  | Worker: checking https://www.vinted.pl/catalog?page=1&time=1765612892&currency=PLN&search_by_image_uuid=&price_from=100&price_to=300&size_ids[]=207&size_ids[]=208&size_ids[]=209&size_ids[]=210&size_ids[]=206&size_ids[]=211&catalog[]=5&search_text=bluza
+worker-1  | Worker: checking https://www.olx.pl/d/oferty/q-iphone/
+worker-1  | Worker: checking https://www.vinted.pl/catalog?catalog[]=76&page=1&time=1766860835&size_ids[]=208&price_from=50&currency=PLN&price_to=100
+worker-1  | Worker: found links: 4
+worker-1  | Worker: checking https://www.olx.pl/krakow/q-laptop-lenovo/?search%5Bdist%5D=15&search%5Bfilter_float_price:from%5D=100&search%5Bfilter_float_price:to%5D=1000
+worker-1  | Worker: checking https://www.vinted.pl/catalog?page=1&time=1765612892&currency=PLN&search_by_image_uuid=&price_from=100&price_to=300&size_ids[]=207&size_ids[]=208&size_ids[]=209&size_ids[]=210&size_ids[]=206&size_ids[]=211&catalog[]=5&search_text=bluza
+worker-1  | Worker: checking https://www.olx.pl/d/oferty/q-iphone/
+worker-1  | Worker: checking https://www.vinted.pl/catalog?catalog[]=76&page=1&time=1766860835&size_ids[]=208&price_from=50&currency=PLN&price_to=100
+worker-1  | Worker: found links: 4
+worker-1  | Worker: checking https://www.olx.pl/krakow/q-laptop-lenovo/?search%5Bdist%5D=15&search%5Bfilter_float_price:from%5D=100&search%5Bfilter_float_price:to%5D=1000
+worker-1  | Worker: checking https://www.vinted.pl/catalog?page=1&time=1765612892&currency=PLN&search_by_image_uuid=&price_from=100&price_to=300&size_ids[]=207&size_ids[]=208&size_ids[]=209&size_ids[]=210&size_ids[]=206&size_ids[]=211&catalog[]=5&search_text=bluza
+worker-1  | Worker: checking https://www.olx.pl/d/oferty/q-iphone/
+worker-1  | Worker: checking https://www.vinted.pl/catalog?catalog[]=76&page=1&time=1766860835&size_ids[]=208&price_from=50&currency=PLN&price_to=100

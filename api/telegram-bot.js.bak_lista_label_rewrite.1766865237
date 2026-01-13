@@ -1,0 +1,1507 @@
+import dotenv from "dotenv";
+dotenv.config();
+
+import fetch from "node-fetch";
+import pg from "pg";
+import { randomBytes } from "node:crypto";
+
+import { t, DEFAULT_LANG, normalizeLang, langLabel, buildLanguageKeyboard } from "./i18n.js";
+import {
+  initDb,
+  ensureUser,
+  setUserLanguage,
+  getUserWithPlanByTelegramId,
+  getUserEntitlementsByTelegramId,
+  getUserById,
+  getLinksByUserId,
+  countActiveLinksForUserId,
+  countEnabledLinksForUserId,
+  insertLinkForUserId,
+  deactivateLinkForUserId,
+  setQuietHours,
+  disableQuietHours,
+  getQuietHours,
+  ensureChatNotificationsRow as ensureChatNotificationsRowDb,
+  clearLinkNotificationMode,
+} from "./db.js";
+
+const { Pool } = pg;
+
+const TG = process.env.TELEGRAM_BOT_TOKEN || "";
+const DATABASE_URL = process.env.DATABASE_URL || "";
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
+const BOT_USERNAME =
+  process.env.TELEGRAM_BOT_USERNAME ||
+  process.env.BOT_USERNAME ||
+  process.env.FYD_BOT_USERNAME ||
+  "";
+
+const PRICE_STARTER = process.env.FYD_PRICE_STARTER || "";
+const PRICE_GROWTH = process.env.FYD_PRICE_GROWTH || "";
+const PRICE_PLATINUM = process.env.FYD_PRICE_PLATINUM || "";
+const PRICE_ADDON10 = process.env.FYD_PRICE_ADDON10 || "";
+
+if (!TG) { console.error("Missing TELEGRAM_BOT_TOKEN"); process.exit(1); }
+if (!DATABASE_URL) { console.error("Missing DATABASE_URL"); process.exit(1); }
+
+const pool = new Pool({ connectionString: DATABASE_URL });
+
+async function dbQuery(sql, params = []) { return pool.query(sql, params); }
+
+function escapeHtml(str = "") {
+  return String(str).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+// ---------- i18n (language) ----------
+const FYD_DEFAULT_LANG = "en";
+const FYD_SUPPORTED_LANGS = [
+  { code: "pl", name: "Polski", flag: "🇵🇱" },
+  { code: "en", name: "English", flag: "🇬🇧" },
+  { code: "de", name: "Deutsch", flag: "🇩🇪" },
+  { code: "fr", name: "Français", flag: "🇫🇷" },
+  { code: "es", name: "Español", flag: "🇪🇸" },
+  { code: "it", name: "Italiano", flag: "🇮🇹" },
+  { code: "pt", name: "Português", flag: "🇵🇹" },
+  { code: "ro", name: "Română", flag: "🇷🇴" },
+  { code: "nl", name: "Nederlands", flag: "🇳🇱" },
+  { code: "cs", name: "Čeština", flag: "🇨🇿" },
+  { code: "sk", name: "Slovenčina", flag: "🇸🇰" },
+];
+
+function fydLangFromUser(user) {
+  const raw = String(user?.language || user?.language_code || "").toLowerCase();
+  const base = raw.includes("-") ? raw.split("-")[0] : raw;
+  return FYD_SUPPORTED_LANGS.some((x) => x.code === base) ? base : FYD_DEFAULT_LANG; // fallback EN
+}
+
+function fydBuildLangKeyboard() {
+  const buttons = FYD_SUPPORTED_LANGS.map((l) => ({
+    text: `${l.name} ${l.flag}`,
+    callback_data: `lang:${l.code}`,
+  }));
+  const rows = [];
+  for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
+  return { inline_keyboard: rows };
+}
+// ---------- i18n (language) END ----------
+
+function addon10CheckoutIntro(lang) {
+  const L = normalizeLang(lang);
+  const MAP = {
+    pl: "➕ Addon +10: +10 linków oraz +100 limitu historii.\nOtwórz płatność poniżej:",
+    en: "➕ Addon +10: +10 links and +100 history limit.\nOpen checkout link below:",
+    de: "➕ Addon +10: +10 Links und +100 Verlaufslimit.\nÖffne den Checkout-Link unten:",
+    fr: "➕ Addon +10 : +10 liens et +100 de limite d’historique.\nOuvrez le lien de paiement ci-dessous :",
+    es: "➕ Addon +10: +10 enlaces y +100 de límite de historial.\nAbre el enlace de pago abajo:",
+    it: "➕ Addon +10: +10 link e +100 di limite storico.\nApri il link di pagamento qui sotto:",
+    pt: "➕ Addon +10: +10 links e +100 de limite de histórico.\nAbra o link de pagamento abaixo:",
+    ro: "➕ Addon +10: +10 linkuri și +100 la limita istoricului.\nDeschide linkul de plată de mai jos:",
+    nl: "➕ Addon +10: +10 links en +100 geschiedenislimiet.\nOpen de betaallink hieronder:",
+    cs: "➕ Addon +10: +10 odkazů a +100 limit historie.\nOtevřete platební odkaz níže:",
+    sk: "➕ Addon +10: +10 odkazov a +100 limit histórie.\nOtvorte platobný odkaz nižšie:",
+  };
+  return MAP[L] || MAP.en;
+}
+
+
+function getErrorText(e) {
+  return e?.message ? String(e.message) : String(e);
+}
+
+async function tgApi(method, payload) {
+  const url = `https://api.telegram.org/bot${TG}/${method}`;
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  return res.json().catch(() => ({}));
+}
+
+async function tgSend(chatId, text, extra = {}) {
+  const MAX_LEN = 3500;
+  const full = String(text ?? "");
+  const parts = [];
+  if (full.length <= MAX_LEN) parts.push(full);
+  else {
+    let rest = full;
+    while (rest.length > 0) {
+      let cut = rest.lastIndexOf("\n", MAX_LEN);
+      if (cut < 1000) cut = MAX_LEN;
+      parts.push(rest.slice(0, cut));
+      rest = rest.slice(cut);
+    }
+  }
+
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    const extraForThis = i === 0 ? extra : {};
+    const res = await tgApi("sendMessage", {
+      chat_id: chatId,
+      text: part,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      ...extraForThis,
+    });
+    if (!res || res.ok !== true) console.error("Telegram send failed:", res?.description || res);
+  }
+}
+
+async function tgAnswerCb(callbackQueryId, text, showAlert = false) {
+  try {
+    await tgApi("answerCallbackQuery", { callback_query_id: callbackQueryId, text, show_alert: !!showAlert });
+  } catch {}
+}
+
+async function stripeGet(path, qs = {}) {
+  if (!STRIPE_SECRET_KEY) throw new Error("NO_STRIPE_SECRET_KEY");
+  const u = new URL(`https://api.stripe.com${path}`);
+  for (const [k, v] of Object.entries(qs)) if (v != null) u.searchParams.append(k, String(v));
+  const res = await fetch(u.toString(), { method: "GET", headers: { Authorization: `Bearer ${STRIPE_SECRET_KEY}` } });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j?.error?.message || `STRIPE_GET_${res.status}`);
+  return j;
+}
+
+async function stripePostForm(path, paramsObj = {}) {
+  if (!STRIPE_SECRET_KEY) throw new Error("NO_STRIPE_SECRET_KEY");
+  const body = new URLSearchParams();
+  for (const [k, v] of Object.entries(paramsObj)) if (v != null) body.append(k, String(v));
+  const res = await fetch(`https://api.stripe.com${path}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${STRIPE_SECRET_KEY}`, "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j?.error?.message || `STRIPE_POST_${res.status}`);
+  return j;
+}
+
+async function stripeCancelSubscriptionNow(subId) {
+  if (!subId) return;
+  try { await stripePostForm(`/v1/subscriptions/${encodeURIComponent(subId)}`, { cancel_at_period_end: "false" }); }
+  catch (e) { console.warn("[stripe] cancel old sub failed:", e?.message || e); }
+}
+
+async function getPlanIdByCode(code) {
+  const c = String(code || "").toLowerCase();
+  const aliases = { starter: "basic", growth: "pro" };
+  const norm = aliases[c] || c;
+  try {
+    const q = await dbQuery(`SELECT id FROM plans WHERE LOWER(code)=LOWER($1) LIMIT 1`, [norm]);
+    if (q.rowCount) return Number(q.rows[0].id);
+  } catch {}
+  return 0;
+}
+
+function planLabel(code) {
+  const c = String(code || "").toLowerCase();
+  if (c === "starter" || c === "basic") return "Starter";
+  if (c === "growth" || c === "pro") return "Growth";
+  if (c === "platinum") return "Platinum";
+  return "Plan";
+}
+
+function nowPlusMinutes(min) {
+  return new Date(Date.now() + Number(min) * 60 * 1000).toISOString();
+}
+
+async function createActivationToken({ planId, kind, checkoutSessionId, tgUserId }) {
+  const token = randomBytes(24).toString("hex");
+  const provider = "stripe";
+  const providerRef = `kind:${kind};cs:${checkoutSessionId};tg:${String(tgUserId)}`;
+  const expiresAt = nowPlusMinutes(90);
+  await dbQuery(
+    `INSERT INTO activation_tokens (token, plan_id, provider, provider_ref, expires_at) VALUES ($1,$2,$3,$4,$5::timestamptz)`,
+    [token, Number(planId), provider, providerRef, expiresAt]
+  );
+  return token;
+}
+
+function parseProviderRef(providerRef = "") {
+  const s = String(providerRef || "");
+  const out = {};
+  for (const part of s.split(";")) {
+    const [k, ...rest] = part.split(":");
+    if (!k || !rest.length) continue;
+    out[String(k).trim()] = rest.join(":").trim();
+  }
+  return out;
+}
+
+async function createPlanCheckoutSession({ user, planCode, priceId, chatId }) {
+  if (!BOT_USERNAME) throw new Error("NO_BOT_USERNAME");
+  if (!priceId) throw new Error("NO_PRICE_ID");
+  const planId = await getPlanIdByCode(planCode);
+  if (!planId) throw new Error(`NO_PLAN_ID_FOR_${planCode}`);
+
+  let existingCustomer = null;
+  let existingSub = null;
+  try {
+    const r = await dbQuery(
+      `SELECT provider_customer_id, provider_subscription_id FROM subscriptions WHERE user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1`,
+      [Number(user.id)]
+    );
+    if (r.rowCount) {
+      existingCustomer = r.rows[0].provider_customer_id || null;
+      existingSub = r.rows[0].provider_subscription_id || null;
+    }
+  } catch {}
+
+  const params = {
+    mode: "subscription",
+    "line_items[0][price]": priceId,
+    "line_items[0][quantity]": "1",
+    client_reference_id: String(user.telegram_user_id || user.telegram_id || user.id),
+    "metadata[plan_code]": String(planCode),
+    "metadata[user_id]": String(user.id),
+    "metadata[tg_user_id]": String(user.telegram_user_id || ""),
+    "metadata[chat_id]": String(chatId || ""),
+    ...(existingCustomer ? { customer: existingCustomer } : {}),
+    ...(existingSub ? { "subscription_data[metadata][upgrade_from]": existingSub } : {}),
+  };
+
+  params.success_url = `https://t.me/${BOT_USERNAME}?start=act_TOKEN_REPLACE`;
+  params.cancel_url = `https://t.me/${BOT_USERNAME}`;
+
+  const session = await stripePostForm("/v1/checkout/sessions", params);
+  if (!session?.id || !session?.url) throw new Error("STRIPE_SESSION_CREATE_FAILED");
+
+  const token = await createActivationToken({ planId, kind: "plan", checkoutSessionId: session.id, tgUserId: user.telegram_user_id });
+
+  try {
+    await stripePostForm(`/v1/checkout/sessions/${encodeURIComponent(session.id)}`, {
+      success_url: `https://t.me/${BOT_USERNAME}?start=act_${token}`,
+    });
+  } catch {}
+
+  return { url: session.url, token, planId };
+}
+
+async function createAddon10CheckoutSession({ user, chatId }) {
+  if (!BOT_USERNAME) throw new Error("NO_BOT_USERNAME");
+  if (!PRICE_ADDON10) throw new Error("NO_PRICE_ADDON10");
+
+  const platinumId = await getPlanIdByCode("platinum");
+  if (!platinumId) throw new Error("NO_PLATINUM_PLAN_ID");
+
+  const ent = await getUserEntitlementsByTelegramId(user.telegram_user_id);
+  const code = String(ent?.plan_code || "").toLowerCase();
+  if (code !== "platinum") throw new Error("ADDON_ONLY_PLATINUM");
+
+  let existingCustomer = null;
+  try {
+    const r = await dbQuery(
+      `SELECT provider_customer_id FROM subscriptions WHERE user_id=$1 AND status='active' ORDER BY updated_at DESC LIMIT 1`,
+      [Number(user.id)]
+    );
+    if (r.rowCount) existingCustomer = r.rows[0].provider_customer_id || null;
+  } catch {}
+
+  const params = {
+    mode: "subscription",
+    "line_items[0][price]": PRICE_ADDON10,
+    "line_items[0][quantity]": "1",
+    client_reference_id: String(user.telegram_user_id || user.id),
+    "metadata[kind]": "addon10",
+    "metadata[user_id]": String(user.id),
+    "metadata[tg_user_id]": String(user.telegram_user_id || ""),
+    "metadata[chat_id]": String(chatId || ""),
+    ...(existingCustomer ? { customer: existingCustomer } : {}),
+  };
+
+  params.success_url = `https://t.me/${BOT_USERNAME}?start=act_TOKEN_REPLACE`;
+  params.cancel_url = `https://t.me/${BOT_USERNAME}`;
+
+  const session = await stripePostForm("/v1/checkout/sessions", params);
+  if (!session?.id || !session?.url) throw new Error("STRIPE_SESSION_CREATE_FAILED");
+
+  const token = await createActivationToken({ planId: platinumId, kind: "addon10", checkoutSessionId: session.id, tgUserId: user.telegram_user_id });
+
+  try {
+    await stripePostForm(`/v1/checkout/sessions/${encodeURIComponent(session.id)}`, {
+      success_url: `https://t.me/${BOT_USERNAME}?start=act_${token}`,
+    });
+  } catch {}
+
+  return { url: session.url, token };
+}
+
+
+// ---- Panel <-> Telegram language sync (single-user chats) ----
+function __normLang(x) {
+  const raw = String(x || "").trim().toLowerCase();
+  const base = raw.includes("-") ? raw.split("-")[0] : raw;
+  try {
+    if (Array.isArray(FYD_SUPPORTED_LANGS) && FYD_SUPPORTED_LANGS.some((l) => l.code === base)) return base;
+  } catch {}
+  return "";
+}
+
+async function getUserLangFromDb(user) {
+  try {
+    const v1 = __normLang(user?.lang || "");
+    if (v1) return v1;
+
+    const uid = user?.id ? Number(user.id) : 0;
+    if (!uid) return null;
+
+    const r = await dbQuery("SELECT lang FROM users WHERE id=$1 LIMIT 1", [uid]).catch(() => ({ rows: [] }));
+    const v2 = __normLang(r?.rows?.[0]?.lang || "");
+    return v2 || null;
+  } catch {
+    return null;
+  }
+}
+
+async function getLang(chatId, user) {
+  // 1) Source of truth: users.lang (shared with Panel)
+  const dbLang = await getUserLangFromDb(user);
+  if (dbLang) return dbLang;
+
+  // 2) Migrate old chat_notifications.language -> users.lang (one-time)
+  try {
+    const q = await dbQuery(
+      "SELECT language FROM chat_notifications WHERE chat_id=$1 AND user_id=$2 LIMIT 1",
+      [String(chatId), Number(user.id)]
+    ).catch(() => ({ rows: [] }));
+
+    const legacy = __normLang(q?.rows?.[0]?.language || "");
+    if (legacy) {
+      await dbQuery(
+        "UPDATE users SET lang=$2, updated_at=NOW() WHERE id=$1 AND (lang IS NULL OR lang='')",
+        [Number(user.id), legacy]
+      ).catch(() => {});
+      return legacy;
+    }
+  } catch {}
+
+  // 3) Fallback: Telegram app language_code (and persist if empty)
+  const guess = __normLang(user?.language_code || user?.language || "") || FYD_DEFAULT_LANG;
+  if (guess && user?.id) {
+    await dbQuery(
+      "UPDATE users SET lang=$2, updated_at=NOW() WHERE id=$1 AND (lang IS NULL OR lang='')",
+      [Number(user.id), guess]
+    ).catch(() => {});
+  }
+  return guess;
+}
+
+async function setLang(chatId, user, langCode) {
+  const lang = __normLang(langCode) || FYD_DEFAULT_LANG;
+
+  // users.lang = shared setting (Panel <-> Telegram)
+  await dbQuery("UPDATE users SET lang=$2, updated_at=NOW() WHERE id=$1", [Number(user.id), lang]).catch(() => {});
+
+  // backward-compat (if column exists)
+  await dbQuery("UPDATE users SET language=$2, updated_at=NOW() WHERE id=$1", [Number(user.id), lang]).catch(() => {});
+
+  // keep per-chat language in sync
+  await ensureChatNotificationsRowDb(String(chatId), user.id);
+  await dbQuery(
+    "UPDATE chat_notifications SET language=$3, updated_at=NOW() WHERE chat_id=$1 AND user_id=$2",
+    [String(chatId), Number(user.id), lang]
+  ).catch(() => {});
+
+  return lang;
+}
+
+// /lang
+async function handleLang(msg, user) {
+  const chatId = String(msg.chat.id);
+  const lang = await getLang(chatId, user);
+  const current = langLabel(lang);
+  await tgSend(chatId, `${t(lang, "choose_language")}\n${t(lang, "language_current", { language: escapeHtml(current) })}`, {
+    reply_markup: buildLanguageKeyboard(),
+  });
+}
+
+// /help
+async function handleHelp(msg, user) {
+  const chatId = String(msg.chat.id);
+  const lang = await getLang(chatId, user);
+
+  // ZAWSZE wysyłaj pełnego helpa (jeśli brakuje tłumaczenia, t() zfallbackuje do EN)
+  await tgSend(chatId, t(lang, "help_text"));
+}
+
+
+
+async function handlePlans(msg, user) {
+  const chatId = String(msg.chat.id);
+  const lang = await getLang(chatId, user);
+  const L = String(lang || "en").replace("_", "-").split("-")[0];
+
+  const ADDON_DESC = {
+    pl: "➕ Addon +10: +10 linków oraz +100 limitu historii.\nOtwórz płatność poniżej:",
+    en: "➕ Addon +10: +10 links and +100 history limit.\nOpen the payment below:",
+    de: "➕ Add-on +10: +10 Links und +100 Verlaufslimit.\nZahlungslink unten:",
+    fr: "➕ Add-on +10 : +10 liens et +100 limite d'historique.\nOuvrez le paiement ci-dessous :",
+    es: "➕ Addon +10: +10 enlaces y +100 de límite de historial.\nAbre el pago abajo:",
+    it: "➕ Add-on +10: +10 link e +100 limite cronologia.\nApri il pagamento qui sotto:",
+    pt: "➕ Add-on +10: +10 links e +100 de limite de histórico.\nAbra o pagamento abaixo:",
+    ro: "➕ Add-on +10: +10 linkuri și +100 la limita de istoric.\nDeschide plata mai jos:",
+    nl: "➕ Add-on +10: +10 links en +100 historielimiet.\nOpen de betaling hieronder:",
+    cs: "➕ Add-on +10: +10 odkazů a +100 limit historie.\nOtevřete platbu níže:",
+    sk: "➕ Add-on +10: +10 odkazov a +100 limit histórie.\nOtvorte platbu nižšie:",
+  };
+
+  const ERR = {
+    pl: "❌ Nie udało się wygenerować linku płatności. Spróbuj ponownie za chwilę.",
+    en: "❌ Couldn't generate the payment link. Please try again in a moment.",
+    de: "❌ Zahlungslink konnte nicht erstellt werden. Bitte versuche es gleich noch einmal.",
+    fr: "❌ Impossible de générer le lien de paiement. Réessayez dans un instant.",
+    es: "❌ No pude generar el enlace de pago. Inténtalo de nuevo en un momento.",
+    it: "❌ Impossibile generare il link di pagamento. Riprova tra un attimo.",
+    pt: "❌ Não foi possível gerar o link de pagamento. Tente novamente em instantes.",
+    ro: "❌ Nu am putut genera linkul de plată. Încearcă din nou în câteva momente.",
+    nl: "❌ Kon de betaallink niet genereren. Probeer het zo nog eens.",
+    cs: "❌ Nepodařilo se vygenerovat platební odkaz. Zkuste to za chvíli znovu.",
+    sk: "❌ Nepodarilo sa vygenerovať platobný odkaz. Skúste to o chvíľu znova.",
+  };
+
+  const PLANS_TXT = {
+    pl: "💳 Wybierz plan:\n\n• Starter: /starter\n• Growth: /growth\n• Platinum: /platinum\n\nPo opłaceniu wrócisz do bota i aktywacja zrobi się automatycznie.",
+    en: "💳 Choose a plan:\n\n• Starter: /starter\n• Growth: /growth\n• Platinum: /platinum\n\nAfter checkout you'll return to the bot and activation will be automatic.",
+    de: "💳 Wähle einen Plan:\n\n• Starter: /starter\n• Growth: /growth\n• Platinum: /platinum\n\nNach dem Checkout kehrst du zum Bot zurück und die Aktivierung passiert automatisch.",
+    fr: "💳 Choisissez un abonnement :\n\n• Starter : /starter\n• Growth : /growth\n• Platinum : /platinum\n\nAprès le paiement, vous reviendrez au bot et l’activation sera automatique.",
+    es: "💳 Elige un plan:\n\n• Starter: /starter\n• Growth: /growth\n• Platinum: /platinum\n\nTras el pago volverás al bot y la activación será automática.",
+    it: "💳 Scegli un piano:\n\n• Starter: /starter\n• Growth: /growth\n• Platinum: /platinum\n\nDopo il pagamento tornerai al bot e l’attivazione sarà automatica.",
+    pt: "💳 Escolha um plano:\n\n• Starter: /starter\n• Growth: /growth\n• Platinum: /platinum\n\nApós o pagamento você volta ao bot e a ativação será automática.",
+    ro: "💳 Alege un plan:\n\n• Starter: /starter\n• Growth: /growth\n• Platinum: /platinum\n\nDupă plată revii în bot și activarea va fi automată.",
+    nl: "💳 Kies een plan:\n\n• Starter: /starter\n• Growth: /growth\n• Platinum: /platinum\n\nNa betaling ga je terug naar de bot en wordt activatie automatisch gedaan.",
+    cs: "💳 Vyberte plán:\n\n• Starter: /starter\n• Growth: /growth\n• Platinum: /platinum\n\nPo platbě se vrátíte do bota a aktivace proběhne automaticky.",
+    sk: "💳 Vyberte plán:\n\n• Starter: /starter\n• Growth: /growth\n• Platinum: /platinum\n\nPo platbe sa vrátite do bota a aktivácia prebehne automaticky.",
+  };
+
+  const planCode = String((user && (user.plan_code || user.plan || "")) || "").toLowerCase();
+  const active = (typeof isPlanActive === "function") ? isPlanActive(user) : true;
+
+  if (active && planCode === "platinum") {
+    try {
+      const resp = await createAddon10CheckoutSession({ user, chatId });
+      const url = resp && resp.url ? String(resp.url) : "";
+      if (!url) throw new Error("missing url");
+      const desc = ADDON_DESC[L] || ADDON_DESC.en;
+      await tgSend(chatId, "✅ " + planLabel("platinum") + "\n\n" + desc + "\n\n" + escapeHtml(url));
+    } catch (e) {
+      await tgSend(chatId, ERR[L] || ERR.en);
+    }
+    return;
+  }
+
+  await tgSend(chatId, PLANS_TXT[L] || PLANS_TXT.en);
+}
+
+async function handleBuyPlan(msg, user, code) {
+  const chatId = String(msg.chat.id);
+  const priceId = code === "starter" ? PRICE_STARTER : code === "growth" ? PRICE_GROWTH : code === "platinum" ? PRICE_PLATINUM : "";
+  if (!STRIPE_SECRET_KEY || !priceId || !BOT_USERNAME) {
+    await tgSend(chatId, "❌ Sales config missing.");
+    return;
+  }
+  const lang = await getLang(chatId, user);
+  try {
+    const { url } = await createPlanCheckoutSession({ user, planCode: code, priceId, chatId });
+    await tgSend(chatId, `${t(lang, "language_current", { language: escapeHtml(langLabel(lang)) })}\n\n${escapeHtml(url)}`);
+  } catch (e) {
+    await tgSend(chatId, `❌ ${escapeHtml(getErrorText(e))}`);
+  }
+}
+
+async function handleAddon10(msg, user) {
+  const chatId = String(msg.chat.id);
+  if (!STRIPE_SECRET_KEY || !PRICE_ADDON10 || !BOT_USERNAME) {
+    await tgSend(chatId, "❌ Addon config missing.");
+    return;
+  }
+  try {
+    const { url } = await createAddon10CheckoutSession({ user, chatId });
+    await tgSend(chatId, escapeHtml(url));
+  } catch (e) {
+    const m = String(e?.message || e);
+    if (m === "ADDON_ONLY_PLATINUM") {
+      await tgSend(chatId, "⛔ Addon +10 is Platinum only.");
+      return;
+    }
+    await tgSend(chatId, `❌ ${escapeHtml(m)}`);
+  }
+}
+
+async function handleLista(msg, user) {
+  const chatId = String(msg.chat.id);
+  const lang = await getLang(chatId, user);
+  const links = await getLinksByUserId(user.id, true);
+  if (!links.length) { await tgSend(chatId, lang === "pl" ? "Nie masz jeszcze żadnych włączonych linków." : "You don't have any enabled links yet."); return; }
+  let text = lang === "pl" ? "📋 Aktywne monitorowane linki:\n\n" : "📋 Active monitored links:\n\n";
+  for (const row of links) {
+    text += `ID <b>${row.id}</b> — ${escapeHtml(row.name || "(no name)")}\n<code>${escapeHtml(row.url)}</code>\n\n`;
+  }
+  text += lang === "pl" ? "Wyłącz: <code>/usun ID</code>\nnp. <code>/usun 18</code>" : "Disable: <code>/remove ID</code>\nE.g. <code>/remove 18</code>";
+  await tgSend(chatId, text);
+}
+
+async function handleUsun(msg, user, argText) {
+  const chatId = String(msg.chat.id);
+  const lang = await getLang(chatId, user);
+  const id = parseInt(argText, 10);
+  if (!id) { await tgSend(chatId, lang === "pl" ? "Podaj ID linku, np.:\n<code>/usun 18</code>" : "Provide link ID, e.g.:\n<code>/remove 18</code>"); return; }
+  const row = await deactivateLinkForUserId(id, user.id);
+  if (!row) { await tgSend(chatId, lang === "pl" ? `Nie znalazłem linku <b>${id}</b> na Twoim koncie. Użyj /lista.` : `I can't find link <b>${id}</b> on your account. Use /list.`); return; }
+  await tgSend(chatId, lang === "pl"
+    ? `✅ Wyłączyłem monitorowanie:\n\nID <b>${row.id}</b> — ${escapeHtml(row.name || "(bez nazwy)")}\n<code>${escapeHtml(row.url || "")}</code>`
+    : `✅ Disabled monitoring:\n\nID <b>${row.id}</b> — ${escapeHtml(row.name || "(no name)")}\n<code>${escapeHtml(row.url || "")}</code>`
+  );
+}
+
+async function handleDodaj(msg, user, argText) {
+  const chatId = String(msg.chat.id);
+  const lang = await getLang(chatId, user);
+
+  if (!argText) {
+    await tgSend(chatId, lang === "pl"
+      ? "Użycie:\n<code>/dodaj &lt;url&gt; [nazwa]</code>\n\nPrzykład:\n<code>/dodaj https://www.olx.pl/oferty/?q=iphone14 iPhone 14 OLX</code>"
+      : "Usage:\n<code>/add &lt;url&gt; [name]</code>\n\nExample:\n<code>/add https://www.olx.pl/oferty/?q=iphone14 iPhone 14 OLX</code>"
+    );
+    return;
+  }
+
+  const parts = argText.split(/\s+/);
+  const url = parts[0];
+  const name = parts.slice(1).join(" ") || null;
+
+  if (!url || !/^https?:\/\//i.test(url)) {
+    await tgSend(chatId, lang === "pl"
+      ? "Pierwszy parametr musi być URL, np. <code>/dodaj https://www.olx.pl/oferty/?q=iphone14</code>"
+      : "First parameter must be a URL, e.g. <code>/add https://www.olx.pl/oferty/?q=iphone14</code>"
+    );
+    return;
+  }
+
+  const ent = await getUserEntitlementsByTelegramId(user.telegram_user_id);
+  const limit = Number(ent?.links_limit_total ?? 0);
+  if (!ent || limit <= 0) {
+    await tgSend(chatId, lang === "pl" ? "❌ Nie masz aktywnego planu. Użyj /plany żeby kupić plan." : "❌ You don't have an active plan. Use /plans to buy a plan.");
+    return;
+  }
+
+  const totalLinks = await countActiveLinksForUserId(user.id);
+  if (totalLinks >= limit) {
+    await tgSend(chatId, lang === "pl" ? `❌ Osiągnięto limit linków: <b>${totalLinks}/${limit}</b>` : `❌ Link limit reached: <b>${totalLinks}/${limit}</b>`);
+    return;
+  }
+
+  const row = await insertLinkForUserId(user.id, name, url);
+  await tgSend(chatId,
+    (lang === "pl"
+      ? `✅ Dodałem nowy link:\n\nID <b>${row.id}</b> — ${escapeHtml(row.name || "(bez nazwy)")}\n<code>${escapeHtml(row.url)}</code>\n\nLinki (łącznie): ${totalLinks + 1}/${limit}\n\nSprawdź: <code>/lista</code>`
+      : `✅ Added a new link:\n\nID <b>${row.id}</b> — ${escapeHtml(row.name || "(no name)")}\n<code>${escapeHtml(row.url)}</code>\n\nLinks total: ${totalLinks + 1}/${limit}\n\nCheck: <code>/list</code>`
+    )
+  );
+}
+
+async function handlePanel(msg, user) {
+  const chatId = String(msg.chat.id);
+  const lang = await getLang(chatId, user);
+  try {
+    const token = randomBytes(24).toString("hex");
+    await dbQuery(
+      `INSERT INTO panel_login_tokens (token, user_id, created_at, expires_at) VALUES ($1,$2,NOW(),NOW()+INTERVAL '10 minutes')`,
+      [token, user.id]
+    );
+    const url = "https://panel.findyourdeal.app/api/auth/login?token=" + encodeURIComponent(token);
+    await tgSend(chatId, lang === "pl" ? `Panel: ${escapeHtml(url)}\nToken ważny 10 minut.` : `Panel: ${escapeHtml(url)}\nToken valid for 10 minutes.`);
+  } catch (e) {
+    await tgSend(chatId, lang === "pl" ? "❌ Błąd przy generowaniu linku do panelu." : "❌ Error while generating panel login link.");
+  }
+}
+
+
+async function handleStatus(msg, user) {
+  const chatId = String(msg.chat.id);
+  const langRaw = await getLang(chatId, user).catch(() => "en");
+  const lang = String(langRaw || "en").toLowerCase();
+  const L = lang.includes("-") ? lang.split("-")[0] : lang;
+
+  const esc = (x) =>
+    String(x ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+  const fmtDay = () =>
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Warsaw",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+
+  const fmtDate = (dt) => {
+    const d = new Date(dt);
+    if (Number.isNaN(d.getTime())) return "";
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/Warsaw",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(d);
+    const get = (t) => (parts.find((p) => p.type === t)?.value || "");
+    const dd = get("day"), mm = get("month"), yyyy = get("year"), hh = get("hour"), mi = get("minute");
+    if (L === "pl") return `${dd}/${mm}/${yyyy} godz. ${hh}:${mi}`;
+    return `${dd}/${mm}/${yyyy}, ${hh}:${mi}`;
+  };
+
+  const S = {
+    en: {
+      title: "ℹ️ Bot status",
+      plan: (p, until) => `Plan: ${p}${until ? ` (until ${until})` : ""}`,
+      active: (a, lim) => `Active searches (enabled): ${a}/${lim}`,
+      total: (t, lim) => `Total searches (in DB): ${t}/${lim}`,
+      addons: (n) => `Add-ons (+10): ${n}`,
+      history: (n) => `Total history limit: ${n}`,
+      daily: (n) => `Daily notifications limit: ${n}`,
+      notifOn: "✅ Notifications ENABLED",
+      notifOff: "⛔ Notifications DISABLED",
+      mode: (m) => `Default mode in this chat: ${m}`,
+      today: (c, lim) => `Today's notifications: ${c}/${lim}`,
+      change: "Change: /on /off /single /batch",
+      quietOff: "Quiet hours: disabled",
+      quietOn: (f, t) => `Quiet hours: ENABLED, hours ${f}:00–${t}:00`,
+      linksHdr: "Enabled searches:",
+      perLink: "Per-link mode: /single_ID /batch_ID /off_ID /on_ID (e.g. /batch_18)",
+      mSingle: "single",
+      mBatch: "batch",
+    },
+    pl: {
+      title: "ℹ️ Status bota",
+      plan: (p, until) => `Plan: ${p}${until ? ` (do ${until})` : ""}`,
+      active: (a, lim) => `Aktywne wyszukiwania (włączone): ${a}/${lim}`,
+      total: (t, lim) => `Łącznie wyszukiwań (w bazie): ${t}/${lim}`,
+      addons: (n) => `Dodatki (addon +10): ${n}`,
+      history: (n) => `Łączny limit ofert (historia): ${n}`,
+      daily: (n) => `Limit dziennych powiadomień: ${n}`,
+      notifOn: "✅ Powiadomienia WŁĄCZONE",
+      notifOff: "⛔ Powiadomienia WYŁĄCZONE",
+      mode: (m) => `Tryb domyślny na tym czacie: ${m}`,
+      today: (c, lim) => `Dzisiejsze powiadomienia: ${c}/${lim}`,
+      change: "Zmiana: /on /off /pojedyncze /zbiorcze",
+      quietOff: "Cisza nocna: wyłączona",
+      quietOn: (f, t) => `Cisza nocna: WŁĄCZONA, godziny ${f}:00–${t}:00`,
+      linksHdr: "Włączone wyszukiwania:",
+      perLink: "Tryb per link: /pojedyncze_ID /zbiorcze_ID /off_ID /on_ID (np. /zbiorcze_18)",
+      mSingle: "pojedynczo",
+      mBatch: "zbiorczo",
+    },
+    de: { ...null },
+    fr: { ...null },
+    es: { ...null },
+    it: { ...null },
+    pt: { ...null },
+    ro: { ...null },
+    nl: { ...null },
+    cs: { ...null },
+    sk: { ...null },
+  };
+
+  // pełne tłumaczenia labeli dla pozostałych języków (żeby /status nie był EN)
+  S.de = { ...S.en,
+    title:"ℹ️ Bot-Status",
+    plan:(p,u)=>`Plan: ${p}${u?` (bis ${u})`:""}`,
+    active:(a,lim)=>`Aktive Suchen (aktiv): ${a}/${lim}`,
+    total:(t,lim)=>`Suchen insgesamt (in DB): ${t}/${lim}`,
+    addons:(n)=>`Add-ons (+10): ${n}`,
+    history:(n)=>`Gesamtlimit Verlauf: ${n}`,
+    daily:(n)=>`Tageslimit Benachrichtigungen: ${n}`,
+    notifOn:"✅ Benachrichtigungen AKTIVIERT",
+    notifOff:"⛔ Benachrichtigungen DEAKTIVIERT",
+    mode:(m)=>`Standardmodus in diesem Chat: ${m}`,
+    today:(c,lim)=>`Benachrichtigungen heute: ${c}/${lim}`,
+    change:"Ändern: /on /off /single /batch",
+    quietOff:"Ruhezeiten: deaktiviert",
+    quietOn:(f,t)=>`Ruhezeiten: AKTIV, ${f}:00–${t}:00`,
+    linksHdr:"Aktive Suchen:",
+    perLink:"Pro-Link-Modus: /single_ID /batch_ID /off_ID /on_ID (z.B. /batch_18)",
+    mSingle:"einzeln", mBatch:"gebündelt"
+  };
+  S.fr = { ...S.en,
+    title:"ℹ️ Statut du bot",
+    plan:(p,u)=>`Plan : ${p}${u?` (jusqu’au ${u})`:""}`,
+    active:(a,lim)=>`Recherches actives (activées) : ${a}/${lim}`,
+    total:(t,lim)=>`Recherches totales (en base) : ${t}/${lim}`,
+    addons:(n)=>`Add-ons (+10) : ${n}`,
+    history:(n)=>`Limite d’historique totale : ${n}`,
+    daily:(n)=>`Limite quotidienne de notifications : ${n}`,
+    notifOn:"✅ Notifications ACTIVÉES",
+    notifOff:"⛔ Notifications DÉSACTIVÉES",
+    mode:(m)=>`Mode par défaut dans ce chat : ${m}`,
+    today:(c,lim)=>`Notifications aujourd’hui : ${c}/${lim}`,
+    change:"Changer : /on /off /single /batch",
+    quietOff:"Heures silencieuses : désactivées",
+    quietOn:(f,t)=>`Heures silencieuses : ACTIVÉES, ${f}:00–${t}:00`,
+    linksHdr:"Recherches activées :",
+    perLink:"Mode par lien : /single_ID /batch_ID /off_ID /on_ID (ex. /batch_18)",
+    mSingle:"individuel", mBatch:"groupé"
+  };
+  S.es = { ...S.en,
+    title:"ℹ️ Estado del bot",
+    plan:(p,u)=>`Plan: ${p}${u?` (hasta ${u})`:""}`,
+    active:(a,lim)=>`Búsquedas activas (habilitadas): ${a}/${lim}`,
+    total:(t,lim)=>`Búsquedas totales (en BD): ${t}/${lim}`,
+    addons:(n)=>`Add-ons (+10): ${n}`,
+    history:(n)=>`Límite total de historial: ${n}`,
+    daily:(n)=>`Límite diario de notificaciones: ${n}`,
+    notifOn:"✅ Notificaciones ACTIVADAS",
+    notifOff:"⛔ Notificaciones DESACTIVADAS",
+    mode:(m)=>`Modo por defecto en este chat: ${m}`,
+    today:(c,lim)=>`Notificaciones hoy: ${c}/${lim}`,
+    change:"Cambiar: /on /off /single /batch",
+    quietOff:"Horas silenciosas: desactivadas",
+    quietOn:(f,t)=>`Horas silenciosas: ACTIVADAS, ${f}:00–${t}:00`,
+    linksHdr:"Búsquedas habilitadas:",
+    perLink:"Modo por enlace: /single_ID /batch_ID /off_ID /on_ID (ej. /batch_18)",
+    mSingle:"individual", mBatch:"agrupado"
+  };
+  S.it = { ...S.en,
+    title:"ℹ️ Stato del bot",
+    plan:(p,u)=>`Piano: ${p}${u?` (fino al ${u})`:""}`,
+    active:(a,lim)=>`Ricerche attive (abilitate): ${a}/${lim}`,
+    total:(t,lim)=>`Ricerche totali (in DB): ${t}/${lim}`,
+    addons:(n)=>`Add-on (+10): ${n}`,
+    history:(n)=>`Limite totale storico: ${n}`,
+    daily:(n)=>`Limite giornaliero notifiche: ${n}`,
+    notifOn:"✅ Notifiche ABILITATE",
+    notifOff:"⛔ Notifiche DISABILITATE",
+    mode:(m)=>`Modalità predefinita in questa chat: ${m}`,
+    today:(c,lim)=>`Notifiche oggi: ${c}/${lim}`,
+    change:"Cambia: /on /off /single /batch",
+    quietOff:"Ore silenziose: disattivate",
+    quietOn:(f,t)=>`Ore silenziose: ABILITATE, ${f}:00–${t}:00`,
+    linksHdr:"Ricerche abilitate:",
+    perLink:"Modalità per link: /single_ID /batch_ID /off_ID /on_ID (es. /batch_18)",
+    mSingle:"singolo", mBatch:"raggruppato"
+  };
+  S.pt = { ...S.en,
+    title:"ℹ️ Status do bot",
+    plan:(p,u)=>`Plano: ${p}${u?` (até ${u})`:""}`,
+    active:(a,lim)=>`Monitoramentos ativos (habilitados): ${a}/${lim}`,
+    total:(t,lim)=>`Monitoramentos totais (no BD): ${t}/${lim}`,
+    addons:(n)=>`Add-ons (+10): ${n}`,
+    history:(n)=>`Limite total do histórico: ${n}`,
+    daily:(n)=>`Limite diário de notificações: ${n}`,
+    notifOn:"✅ Notificações ATIVADAS",
+    notifOff:"⛔ Notificações DESATIVADAS",
+    mode:(m)=>`Modo padrão neste chat: ${m}`,
+    today:(c,lim)=>`Notificações hoje: ${c}/${lim}`,
+    change:"Alterar: /on /off /single /batch",
+    quietOff:"Horas de silêncio: desativadas",
+    quietOn:(f,t)=>`Horas de silêncio: ATIVADAS, ${f}:00–${t}:00`,
+    linksHdr:"Monitoramentos habilitados:",
+    perLink:"Modo por link: /single_ID /batch_ID /off_ID /on_ID (ex. /batch_18)",
+    mSingle:"individual", mBatch:"agrupado"
+  };
+  S.ro = { ...S.en,
+    title:"ℹ️ Status bot",
+    plan:(p,u)=>`Plan: ${p}${u?` (până la ${u})`:""}`,
+    active:(a,lim)=>`Monitorizări active (activate): ${a}/${lim}`,
+    total:(t,lim)=>`Monitorizări totale (în DB): ${t}/${lim}`,
+    addons:(n)=>`Add-on (+10): ${n}`,
+    history:(n)=>`Limită totală istoric: ${n}`,
+    daily:(n)=>`Limită zilnică notificări: ${n}`,
+    notifOn:"✅ Notificări ACTIVATE",
+    notifOff:"⛔ Notificări DEZACTIVATE",
+    mode:(m)=>`Mod implicit în acest chat: ${m}`,
+    today:(c,lim)=>`Notificări azi: ${c}/${lim}`,
+    change:"Schimbă: /on /off /single /batch",
+    quietOff:"Ore de liniște: dezactivate",
+    quietOn:(f,t)=>`Ore de liniște: ACTIVATE, ${f}:00–${t}:00`,
+    linksHdr:"Căutări activate:",
+    perLink:"Mod per link: /single_ID /batch_ID /off_ID /on_ID (ex. /batch_18)",
+    mSingle:"individual", mBatch:"grupat"
+  };
+  S.nl = { ...S.en,
+    title:"ℹ️ Botstatus",
+    plan:(p,u)=>`Plan: ${p}${u?` (tot ${u})`:""}`,
+    active:(a,lim)=>`Actieve zoekopdrachten (aan): ${a}/${lim}`,
+    total:(t,lim)=>`Totaal (in DB): ${t}/${lim}`,
+    addons:(n)=>`Add-ons (+10): ${n}`,
+    history:(n)=>`Totale geschiedenisl limiet: ${n}`,
+    daily:(n)=>`Dagelijkse meldingenlimiet: ${n}`,
+    notifOn:"✅ Meldingen AAN",
+    notifOff:"⛔ Meldingen UIT",
+    mode:(m)=>`Standaardmodus in deze chat: ${m}`,
+    today:(c,lim)=>`Meldingen vandaag: ${c}/${lim}`,
+    change:"Wijzig: /on /off /single /batch",
+    quietOff:"Stilte-uren: uit",
+    quietOn:(f,t)=>`Stilte-uren: AAN, ${f}:00–${t}:00`,
+    linksHdr:"Ingeschakelde zoekopdrachten:",
+    perLink:"Per-link-modus: /single_ID /batch_ID /off_ID /on_ID (bijv. /batch_18)",
+    mSingle:"individueel", mBatch:"gebundeld"
+  };
+  S.cs = { ...S.en,
+    title:"ℹ️ Stav bota",
+    plan:(p,u)=>`Plán: ${p}${u?` (do ${u})`:""}`,
+    active:(a,lim)=>`Aktivní hledání (zapnuto): ${a}/${lim}`,
+    total:(t,lim)=>`Celkem (v DB): ${t}/${lim}`,
+    addons:(n)=>`Doplňky (+10): ${n}`,
+    history:(n)=>`Celkový limit historie: ${n}`,
+    daily:(n)=>`Denní limit notifikací: ${n}`,
+    notifOn:"✅ Notifikace ZAPNUTÉ",
+    notifOff:"⛔ Notifikace VYPNUTÉ",
+    mode:(m)=>`Výchozí režim v tomto chatu: ${m}`,
+    today:(c,lim)=>`Notifikace dnes: ${c}/${lim}`,
+    change:"Změna: /on /off /single /batch",
+    quietOff:"Tichý režim: vypnutý",
+    quietOn:(f,t)=>`Tichý režim: ZAPNUTÝ, ${f}:00–${t}:00`,
+    linksHdr:"Zapnuté hledání:",
+    perLink:"Režim pro odkaz: /single_ID /batch_ID /off_ID /on_ID (např. /batch_18)",
+    mSingle:"jednotlivě", mBatch:"hromadně"
+  };
+  S.sk = { ...S.en,
+    title:"ℹ️ Status bota",
+    plan:(p,u)=>`Plán: ${p}${u?` (do ${u})`:""}`,
+    active:(a,lim)=>`Aktívne hľadania (zapnuté): ${a}/${lim}`,
+    total:(t,lim)=>`Celkovo (v DB): ${t}/${lim}`,
+    addons:(n)=>`Doplnky (+10): ${n}`,
+    history:(n)=>`Celkový limit histórie: ${n}`,
+    daily:(n)=>`Denný limit notifikácií: ${n}`,
+    notifOn:"✅ Notifikácie ZAPNUTÉ",
+    notifOff:"⛔ Notifikácie VYPNUTÉ",
+    mode:(m)=>`Predvolený režim v tomto chate: ${m}`,
+    today:(c,lim)=>`Notifikácie dnes: ${c}/${lim}`,
+    change:"Zmena: /on /off /single /batch",
+    quietOff:"Tiché hodiny: vypnuté",
+    quietOn:(f,t)=>`Tiché hodiny: ZAPNUTÉ, ${f}:00–${t}:00`,
+    linksHdr:"Zapnuté hľadania:",
+    perLink:"Režim pre odkaz: /single_ID /batch_ID /off_ID /on_ID (napr. /batch_18)",
+    mSingle:"jednotlivo", mBatch:"hromadne"
+  };
+
+  const T = S[L] || S.en;
+
+  // DB helper (działa czy masz dbQuery, czy tylko pool)
+  const q = async (sql, params = []) => {
+    if (typeof dbQuery === "function") return await dbQuery(sql, params);
+    if (typeof pool !== "undefined" && pool && typeof pool.query === "function") return await pool.query(sql, params);
+    throw new Error("No dbQuery/pool available");
+  };
+
+  // entitlements (jeśli istnieje)
+  const ent = await getUserEntitlementsByTelegramId(user.telegram_user_id).catch(() => null);
+  const planCode = String(ent?.plan_code || user?.plan_code || user?.plan_name || user?.plan || "").toLowerCase();
+  const planName = esc(planLabel ? planLabel(planCode || user?.plan_name || "") : (planCode || user?.plan_name || "Plan"));
+
+  const until = ent?.expires_at || user?.expires_at || user?.plan_expires_at || null;
+  const untilStr = until ? fmtDate(until) : "";
+
+  // limity (preferuj ent)
+  let linksLimit = Number(ent?.links_limit_total ?? ent?.links_limit ?? 0);
+  if (!Number.isFinite(linksLimit) || linksLimit <= 0) linksLimit = "?";
+
+  // addon_qty
+  let addons = 0;
+  try {
+    const r = await q(
+      `SELECT COALESCE(SUM(COALESCE(addon_qty,0)),0)::int AS n
+       FROM subscriptions
+       WHERE user_id=$1 AND status='active'`,
+      [Number(user.id)]
+    );
+    addons = Number(r.rows?.[0]?.n ?? 0);
+    if (!Number.isFinite(addons) || addons < 0) addons = 0;
+  } catch {}
+
+  // daily/history (jeśli ent nie podaje)
+  const baseHistory =
+    planCode === "platinum" ? 800 :
+    planCode === "growth" || planCode === "pro" ? 700 :
+    planCode === "starter" || planCode === "basic" ? 600 :
+    planCode === "trial" ? 200 : 0;
+
+  const baseDaily =
+    planCode === "platinum" ? 500 :
+    planCode === "growth" || planCode === "pro" ? 400 :
+    planCode === "starter" || planCode === "basic" ? 200 :
+    planCode === "trial" ? 50 : 0;
+
+  let historyLimit = Number(ent?.history_total_limit ?? ent?.history_limit_total ?? ent?.history_limit ?? 0);
+  if (!Number.isFinite(historyLimit) || historyLimit <= 0) historyLimit = baseHistory + addons * 100;
+
+  let dailyLimit = Number(ent?.daily_notifications_limit ?? ent?.daily_limit ?? ent?.daily_notifications ?? 0);
+  if (!Number.isFinite(dailyLimit) || dailyLimit <= 0) dailyLimit = baseDaily;
+
+  // link counts
+  let enabled = 0, total = 0;
+  try {
+    const r1 = await q(`SELECT COALESCE(label,'') AS label, COUNT(*)::int AS n FROM links WHERE user_id=$1 AND active=TRUE`, [Number(user.id)]);
+    enabled = Number(r1.rows?.[0]?.n ?? 0) || 0;
+    const r2 = await q(`SELECT COUNT(*)::int AS n FROM links WHERE user_id=$1`, [Number(user.id)]);
+    total = Number(r2.rows?.[0]?.n ?? 0) || 0;
+  } catch {}
+
+  // chat notifications
+  let notifEnabled = true;
+  let chatMode = "single";
+  let dailyCount = 0;
+
+  try {
+    const r = await q(
+      `SELECT enabled, mode, daily_count, daily_count_date
+       FROM chat_notifications
+       WHERE chat_id=$1 AND user_id=$2
+       LIMIT 1`,
+      [String(chatId), Number(user.id)]
+    );
+    const row = r.rows?.[0];
+    if (row) {
+      notifEnabled = row.enabled !== false;
+      chatMode = String(row.mode || "single").toLowerCase() === "batch" ? "batch" : "single";
+      dailyCount = Number(row.daily_count ?? 0) || 0;
+
+      const today = fmtDay();
+      const d0 = row.daily_count_date
+        ? (row.daily_count_date.toISOString ? row.daily_count_date.toISOString().slice(0,10) : String(row.daily_count_date).slice(0,10))
+        : "";
+      if (d0 && d0 !== today) dailyCount = 0;
+    }
+  } catch {}
+
+  const modeLabel = (m) => (m === "batch" ? T.mBatch : T.mSingle);
+
+  // quiet hours
+  let quietLine = T.quietOff;
+  try {
+    if (typeof getQuietHours === "function") {
+      const qh = await getQuietHours(String(chatId));
+      if (qh && qh.quiet_enabled) quietLine = T.quietOn(qh.quiet_from, qh.quiet_to);
+    }
+  } catch {}
+
+  // links list + per-link mode
+  let linksText = "";
+  try {
+    const r = await q(
+      `SELECT id, name, source
+       FROM links
+       WHERE user_id=$1 AND active=TRUE
+       ORDER BY id ASC`,
+      [Number(user.id)]
+    );
+
+    for (const row of (r.rows || [])) {
+      let per = null;
+      try {
+        const m = await q(
+          `SELECT mode
+           FROM link_notification_modes
+           WHERE user_id=$1 AND chat_id=$2 AND link_id=$3
+           ORDER BY updated_at DESC
+           LIMIT 1`,
+          [Number(user.id), String(chatId), Number(row.id)]
+        );
+        per = m.rows?.[0]?.mode || null;
+      } catch {}
+
+      const eff = per ? String(per).toLowerCase() : chatMode;
+      const icon = eff === "off" ? "⛔" : "✅";
+      const src = String(row.source || "").toUpperCase() || "LINK";
+      const name = esc(row.name || "(no name)");
+      const mLabel = eff === "off" ? "OFF" : modeLabel(eff === "batch" ? "batch" : "single");
+      linksText += `• ${icon} ${row.id} – ${name} (${src}) – ${L === "pl" ? "tryb" : "mode"}: ${mLabel}\n`;
+    }
+  } catch {}
+
+  if (!linksText) linksText = "";
+
+  const out =
+    `${T.title}\n\n` +
+    `${T.plan(planName, untilStr)}\n\n` +
+    `${T.active(enabled, linksLimit)}\n` +
+    `${T.total(total, linksLimit)}\n\n` +
+    `${T.addons(addons)}\n` +
+    `${T.history(historyLimit)}\n` +
+    `${T.daily(dailyLimit)}\n\n` +
+    `${notifEnabled ? T.notifOn : T.notifOff}\n` +
+    `${T.mode(modeLabel(chatMode))}\n` +
+    `${T.today(dailyCount, dailyLimit)}\n` +
+    `${T.change}\n\n` +
+    `${quietLine}\n\n` +
+    `${T.linksHdr}\n` +
+    (linksText || (L === "pl" ? "(brak)\n" : "(none)\n")) +
+    `\n${T.perLink}`;
+
+  await tgSend(chatId, out.trim());
+}
+
+async function handleNotificationsOn(msg, user) {
+  const chatId = String(msg.chat.id);
+  await ensureChatNotificationsRowDb(chatId, user.id);
+  await dbQuery(
+    `INSERT INTO chat_notifications (chat_id,user_id,enabled,mode,updated_at) VALUES ($1,$2,TRUE,'single',NOW())
+     ON CONFLICT (chat_id,user_id) DO UPDATE SET enabled=TRUE, updated_at=NOW()`,
+    [chatId, user.id]
+  );
+  const lang = await getLang(chatId, user);
+  await tgSend(chatId, lang === "pl" ? "✅ Powiadomienia WŁĄCZONE na tym czacie." : "✅ Notifications ENABLED in this chat.");
+}
+
+async function handleNotificationsOff(msg, user) {
+  const chatId = String(msg.chat.id);
+  await ensureChatNotificationsRowDb(chatId, user.id);
+  await dbQuery(
+    `INSERT INTO chat_notifications (chat_id,user_id,enabled,mode,updated_at) VALUES ($1,$2,FALSE,'single',NOW())
+     ON CONFLICT (chat_id,user_id) DO UPDATE SET enabled=FALSE, updated_at=NOW()`,
+    [chatId, user.id]
+  );
+  const lang = await getLang(chatId, user);
+  await tgSend(chatId, lang === "pl" ? "⛔ Powiadomienia WYŁĄCZONE na tym czacie." : "⛔ Notifications DISABLED in this chat.");
+}
+
+async function handleModeSingle(msg, user) {
+  const chatId = String(msg.chat.id);
+  await ensureChatNotificationsRowDb(chatId, user.id);
+  await dbQuery(`UPDATE chat_notifications SET mode='single', updated_at=NOW() WHERE chat_id=$1 AND user_id=$2`, [chatId, user.id]);
+  const lang = await getLang(chatId, user);
+  await tgSend(chatId, lang === "pl" ? "📨 Ustawiono tryb: <b>pojedynczo</b> (domyślny na tym czacie)." : "📨 Mode set: <b>single</b> (default in this chat).");
+}
+
+async function handleModeBatch(msg, user) {
+  const chatId = String(msg.chat.id);
+  await ensureChatNotificationsRowDb(chatId, user.id);
+  await dbQuery(`UPDATE chat_notifications SET mode='batch', updated_at=NOW() WHERE chat_id=$1 AND user_id=$2`, [chatId, user.id]);
+  const lang = await getLang(chatId, user);
+  await tgSend(chatId, lang === "pl" ? "📦 Ustawiono tryb: <b>zbiorczo</b> (domyślny na tym czacie)." : "📦 Mode set: <b>batch</b> (default in this chat).");
+}
+
+async function setPerLinkMode(chatId, userId, linkId, mode) {
+  const m = String(mode || "").toLowerCase();
+  const finalMode = m === "batch" ? "batch" : m === "off" ? "off" : "single";
+
+  const chk = await dbQuery(`SELECT id FROM links WHERE id=$1 AND user_id=$2 LIMIT 1`, [Number(linkId), Number(userId)]);
+  if (!chk.rowCount) return { ok: false, reason: "NOT_OWNED" };
+
+  await dbQuery(
+    `INSERT INTO link_notification_modes (user_id,chat_id,link_id,mode,updated_at)
+     VALUES ($1,$2,$3,$4,NOW())
+     ON CONFLICT (user_id,chat_id,link_id) DO UPDATE SET mode=EXCLUDED.mode, updated_at=NOW()`,
+    [Number(userId), String(chatId), Number(linkId), finalMode]
+  );
+
+  return { ok: true, mode: finalMode };
+}
+
+async function handleQuiet(msg, user) {
+  const chatId = String(msg.chat.id);
+  const lang = await getLang(chatId, user);
+  const arg = (msg.text || "").trim().split(/\s+/).slice(1).join(" ").trim();
+
+  if (!arg) {
+    const qh = await getQuietHours(chatId);
+    if (qh?.quiet_enabled) {
+      await tgSend(chatId, lang === "pl"
+        ? `🌙 Cisza nocna: <b>WŁĄCZONA</b>, godziny ${qh.quiet_from}:00–${qh.quiet_to}:00`
+        : `🌙 Quiet hours: <b>ENABLED</b>, hours ${qh.quiet_from}:00–${qh.quiet_to}:00`
+      );
+    } else {
+      await tgSend(chatId, lang === "pl"
+        ? "🌙 Cisza nocna: <b>wyłączona</b>.\nUstaw: <code>/cisza 22-7</code>"
+        : "🌙 Quiet hours: <b>disabled</b>.\nSet: <code>/quiet 22-7</code>"
+      );
+    }
+    return;
+  }
+
+  const m = arg.match(/^(\d{1,2})\s*-\s*(\d{1,2})$/);
+  if (!m) {
+    await tgSend(chatId, lang === "pl" ? "Podaj zakres jako HH-HH, np. <code>/cisza 22-7</code>" : "Provide range as HH-HH, e.g. <code>/quiet 22-7</code>");
+    return;
+  }
+
+  const fromHour = Number(m[1]);
+  const toHour = Number(m[2]);
+  if (!Number.isFinite(fromHour) || !Number.isFinite(toHour) || fromHour < 0 || fromHour > 23 || toHour < 0 || toHour > 23) {
+    await tgSend(chatId, lang === "pl" ? "Godziny muszą być w zakresie 0–23, np. <code>/cisza 22-7</code>" : "Hours must be 0–23, e.g. <code>/quiet 22-7</code>");
+    return;
+  }
+
+  await setQuietHours(chatId, fromHour, toHour);
+  await tgSend(chatId, lang === "pl"
+    ? `🌙 Ustawiono ciszę nocną: <b>${fromHour}:00–${toHour}:00</b>`
+    : `🌙 Quiet hours set: <b>${fromHour}:00–${toHour}:00</b>`
+  );
+}
+
+async function handleQuietOff(msg, user) {
+  const chatId = String(msg.chat.id);
+  await disableQuietHours(chatId);
+  const lang = await getLang(chatId, user);
+  await tgSend(chatId, lang === "pl" ? "🌙 Cisza nocna: <b>WYŁĄCZONA</b>" : "🌙 Quiet hours: <b>DISABLED</b>");
+}
+
+async function handleCallback(update) {
+  const cq = update.callback_query;
+  if (!cq) return;
+
+  const data = cq.data || "";
+  const chatId = cq.message?.chat?.id;
+  const fromId = cq.from?.id ? String(cq.from.id) : null;
+
+  if (!chatId || !fromId) {
+    await tgAnswerCb(cq.id, "Missing chat/user data.");
+    return;
+  }
+
+  const u = await getUserWithPlanByTelegramId(fromId);
+  if (!u?.id) {
+    await tgAnswerCb(cq.id, "Use /start.", true);
+    return;
+  }
+
+  await ensureChatNotificationsRowDb(String(chatId), u.id);
+
+  const mLang = data.match(/^lang:([a-z]{2})$/i);
+  if (mLang) {
+    const newLang = __normLang(mLang[1]) || FYD_DEFAULT_LANG;
+    await setLang(String(chatId), u, newLang);
+    await tgAnswerCb(cq.id, "OK");
+    await tgSend(String(chatId), t(newLang, "language_set", { language: escapeHtml(langLabel(newLang)) }));
+    return;
+  }
+
+
+const m = data.match(/^lnmode:(\d+):(off|single|batch)$/i);
+  if (m) {
+    const linkId = Number(m[1]);
+    const mode = String(m[2]).toLowerCase();
+    const res = await setPerLinkMode(String(chatId), u.id, linkId, mode);
+    if (!res.ok) { await tgAnswerCb(cq.id, "Can't set mode.", true); return; }
+    const lang = await getLang(String(chatId), u);
+    const pretty = res.mode === "batch" ? (lang === "pl" ? "zbiorczo" : "batch") : res.mode === "off" ? "OFF" : (lang === "pl" ? "pojedynczo" : "single");
+    await tgAnswerCb(cq.id, lang === "pl" ? `Ustawiono: ${pretty}` : `Set: ${pretty}`);
+    return;
+  }
+
+  await tgAnswerCb(cq.id, "Unknown action.");
+}
+
+let offset = 0;
+
+async function fetchUpdates() {
+  const url = new URL(`https://api.telegram.org/bot${TG}/getUpdates`);
+  url.searchParams.set("timeout", "30");
+  if (offset) url.searchParams.set("offset", String(offset));
+  const res = await fetch(url.href);
+  if (!res.ok) throw new Error(`getUpdates HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data.ok) throw new Error(`getUpdates Telegram error: ${data.description}`);
+  return data.result;
+}
+
+function normalizeCommand(cmdRaw) {
+  const c = cmdRaw.toLowerCase().split("@")[0];
+
+  const map = new Map([
+    ["/help", "/help"], ["/pomoc", "/help"],
+    ["/start", "/start"],
+    ["/plany", "/plans"], ["/kup", "/plans"], ["/plans", "/plans"],
+    ["/lista", "/list"], ["/list", "/list"],
+    ["/dodaj", "/add"], ["/add", "/add"],
+    ["/usun", "/remove"], ["/remove", "/remove"],
+    ["/status", "/status"], ["/config", "/status"],
+    ["/cisza", "/quiet"], ["/quiet", "/quiet"],
+    ["/cisza_off", "/quiet_off"], ["/quiet_off", "/quiet_off"],
+    ["/najnowsze", "/latest"], ["/latest", "/latest"],
+    ["/pojedyncze", "/single"], ["/pojedynczo", "/single"], ["/single", "/single"],
+    ["/zbiorcze", "/batch"], ["/batch", "/batch"],
+    ["/on", "/on"], ["/off", "/off"],
+    ["/panel", "/panel"],
+    ["/lang", "/lang"],
+    ["/starter", "/starter"], ["/growth", "/growth"], ["/platinum", "/platinum"],
+    ["/addon10", "/addon10"],
+  ]);
+
+  return map.get(c) || c;
+}
+
+async function handleUpdate(update) {
+  if (update.callback_query) { await handleCallback(update); return; }
+
+  const msg = update.message;
+  if (!msg || !msg.text) return;
+
+  const chatType = msg.chat?.type || "";
+  if (chatType && chatType !== "private") {
+    await tgSend(String(msg.chat.id), "❌ Private chat only.");
+    return;
+  }
+
+  const chatId = String(msg.chat.id);
+  const from = msg.from || {};
+  const tgId = from.id ? String(from.id) : null;
+  if (!tgId) return;
+
+  // wspieramy: /on 18, /single 18, /batch 18 oraz PL odpowiedniki
+  let text = (msg.text ?? "").trim();
+  const mSpace = text.match(/^\/(on|off|single|batch|pojedyncze|pojedynczo|zbiorcze)\s+(\d+)\b/i);
+  if (mSpace) {
+    const cmd = mSpace[1].toLowerCase() === "pojedynczo" ? "pojedyncze" : mSpace[1].toLowerCase();
+    text = `/${cmd}_${mSpace[2]}`;
+  }
+
+  await initDb();
+
+  await ensureUser(from.id, from.username || null, from.first_name || null, from.last_name || null, from.language_code || null);
+
+  let user = null;
+  if (Number(tgId) === 1) user = await getUserById(1);
+  else user = await getUserWithPlanByTelegramId(tgId);
+
+  if (!user) {
+    await tgSend(chatId, "Use /start.");
+    return;
+  }
+
+  await ensureChatNotificationsRowDb(chatId, user.id);
+
+  const [commandRaw, ...rest] = text.split(/\s+/);
+  const command = normalizeCommand(commandRaw);
+  const argText = rest.join(" ").trim();
+
+  // per-link: /single_18 /batch_18 /off_18 /on_18 oraz PL: /pojedyncze_18 /zbiorcze_18
+  const perLink = command.match(/^\/(pojedyncze|zbiorcze|single|batch|off|on)_(\d+)$/i);
+  if (perLink) {
+    const kind = perLink[1].toLowerCase();
+    const linkId = Number(perLink[2]);
+    const lang = await getLang(chatId, user);
+
+    if (kind === "on") {
+      const chk = await dbQuery(`SELECT id FROM links WHERE id=$1 AND user_id=$2 LIMIT 1`, [linkId, user.id]);
+      if (!chk.rowCount) { await tgSend(chatId, lang === "pl" ? `❌ Link <b>${linkId}</b> nie należy do Twojego konta.` : `❌ Link <b>${linkId}</b> is not on your account.`); return; }
+      await clearLinkNotificationMode(user.id, chatId, linkId);
+
+      const cn = await dbQuery(`SELECT mode FROM chat_notifications WHERE chat_id=$1 AND user_id=$2 LIMIT 1`, [chatId, user.id]);
+      const chatMode = (String(cn.rows?.[0]?.mode || "single").toLowerCase() === "batch")
+        ? (lang === "pl" ? "zbiorczo" : "batch")
+        : (lang === "pl" ? "pojedynczo" : "single");
+
+      await tgSend(chatId, lang === "pl"
+        ? `✅ Link <b>${linkId}</b> WŁĄCZONY (dziedziczy tryb czatu: <b>${chatMode}</b>).`
+        : `✅ Link <b>${linkId}</b> ENABLED (inherits chat mode: <b>${chatMode}</b>).`
+      );
+      return;
+    }
+
+    const mode = (kind === "zbiorcze" || kind === "batch") ? "batch" : kind === "off" ? "off" : "single";
+    const res = await setPerLinkMode(chatId, user.id, linkId, mode);
+    if (!res.ok) {
+      await tgSend(chatId, lang === "pl" ? "❌ Link nie należy do Twojego konta." : "❌ Link is not on your account.");
+      return;
+    }
+    const pretty = res.mode === "batch" ? (lang === "pl" ? "zbiorczo" : "batch") : res.mode === "off" ? "OFF" : (lang === "pl" ? "pojedynczo" : "single");
+    await tgSend(chatId, lang === "pl" ? `✅ Link <b>${linkId}</b> ustawiony: <b>${pretty}</b>` : `✅ Link <b>${linkId}</b> set to: <b>${pretty}</b>`);
+    return;
+  }
+
+  if (command === "/start") { await handleHelp(msg, user); return; }
+  if (command === "/help") { await handleHelp(msg, user); return; }
+  if (command === "/lang") { await handleLang(msg, user); return; }
+  if (command === "/status") return await handleStatus(msg, user);
+
+  if (command === "/plans") return await handlePlans(msg, user);
+  if (command === "/starter") return await handleBuyPlan(msg, user, "starter");
+  if (command === "/growth") return await handleBuyPlan(msg, user, "growth");
+  if (command === "/platinum") return await handleBuyPlan(msg, user, "platinum");
+  if (command === "/addon10") return await handleAddon10(msg, user);
+
+  if (command === "/panel") return await handlePanel(msg, user);
+  if (command === "/list") return await handleLista(msg, user);
+  if (command === "/remove") return await handleUsun(msg, user, argText);
+  if (command === "/add") return await handleDodaj(msg, user, argText);
+
+  if (command === "/on") return await handleNotificationsOn(msg, user);
+  if (command === "/off") return await handleNotificationsOff(msg, user);
+  if (command === "/single") return await handleModeSingle(msg, user);
+  if (command === "/batch") return await handleModeBatch(msg, user);
+
+  if (command === "/quiet_off") return await handleQuietOff(msg, user);
+  if (command === "/quiet") return await handleQuiet(msg, user);
+
+  const lang = await getLang(chatId, user);
+
+  // ---------- /usun_uzytkownika (SUPERADMIN) ----------
+  if ((text || "").trim().startsWith("/usun_uzytkownika")) {
+    const fromId = msg?.from?.id || 0;
+    const superAdmins = String(process.env.FYD_SUPERADMIN_TG_IDS || "")
+      .split(/[, ]+/)
+      .map((x) => Number(String(x || "").trim()))
+      .filter((x) => Number.isFinite(x) && x > 0);
+
+    if (!superAdmins.includes(fromId)) {
+      await tgSend(chatId, "⛔ Brak uprawnień (tylko SUPERADMIN).");
+      return;
+    }
+
+    const parts = String(text || "").trim().split(/\s+/);
+    const tgId = Number(parts[1] || 0);
+
+    if (!Number.isFinite(tgId) || tgId <= 0) {
+      await tgSend(chatId, "Użycie: /usun_uzytkownika <telegram_user_id>");
+      return;
+    }
+
+    const safe = async (sql, params) => {
+      try { await pool.query(sql, params); } catch (e) {}
+    };
+
+    try {
+      const u = await pool.query("SELECT id FROM users WHERE telegram_user_id=$1 LIMIT 1", [tgId]);
+      if (!u.rows.length) {
+        await tgSend(chatId, `ℹ️ Nie znaleziono użytkownika o telegram_user_id=${tgId}`);
+        return;
+      }
+      const userId = u.rows[0].id;
+
+      await pool.query("BEGIN");
+
+      await safe("DELETE FROM panel_sessions WHERE user_id=$1", [userId]);
+      await safe("DELETE FROM panel_login_tokens WHERE user_id=$1", [userId]);
+      await safe("DELETE FROM subscriptions WHERE user_id=$1", [userId]);
+
+      await safe("DELETE FROM link_notification_modes WHERE user_id=$1", [userId]);
+      await safe("DELETE FROM chat_notifications WHERE user_id=$1", [userId]);
+
+      await safe("DELETE FROM link_items WHERE link_id IN (SELECT id FROM links WHERE user_id=$1)", [userId]);
+      await safe("DELETE FROM link_notification_modes WHERE link_id IN (SELECT id FROM links WHERE user_id=$1)", [userId]);
+      await safe("DELETE FROM links WHERE user_id=$1", [userId]);
+
+      await pool.query("DELETE FROM users WHERE id=$1", [userId]);
+
+      await pool.query("COMMIT");
+      await tgSend(chatId, `✅ Usunięto użytkownika telegram_user_id=${tgId} (user_id=${userId}) i wyczyszczono jego dane.`);
+      return;
+    } catch (e) {
+      try { await pool.query("ROLLBACK"); } catch {}
+      await tgSend(chatId, `❌ Błąd usuwania użytkownika: ${String(e?.message || e)}`);
+      return;
+    }
+  }
+
+  // ---------- /daj_admina (SUPERADMIN) ----------
+  if ((text || "").trim().startsWith("/daj_admina")) {
+    const fromId = msg?.from?.id || 0;
+    const superAdmins = String(process.env.FYD_SUPERADMIN_TG_IDS || "")
+      .split(/[, ]+/)
+      .map((x) => Number(String(x || "").trim()))
+      .filter((x) => Number.isFinite(x) && x > 0);
+
+    if (!superAdmins.includes(fromId)) {
+      await tgSend(chatId, "⛔ Brak uprawnień (tylko SUPERADMIN).");
+      return;
+    }
+
+    const parts = String(text || "").trim().split(/\s+/);
+    const tgId = Number(parts[1] || 0);
+
+    if (!Number.isFinite(tgId) || tgId <= 0) {
+      await tgSend(chatId, "Użycie: /daj_admina <telegram_user_id>");
+      return;
+    }
+
+    try {
+      await pool.query(
+        "UPDATE users SET is_admin=TRUE WHERE telegram_user_id=$1",
+        [tgId]
+      );
+
+      const check = await pool.query("SELECT id FROM users WHERE telegram_user_id=$1 LIMIT 1", [tgId]);
+      if (!check.rows.length) {
+        await tgSend(chatId, `ℹ️ Nie znaleziono użytkownika o telegram_user_id=${tgId} (najpierw musi zrobić /start).`);
+        return;
+      }
+
+      await tgSend(chatId, `✅ Nadano ADMIN dla telegram_user_id=${tgId}`);
+      return;
+    } catch (e) {
+      await tgSend(chatId, `❌ Błąd nadawania admina: ${String(e?.message || e)}`);
+      return;
+    }
+  }
+
+
+  // ---------- /nazwa (USER) ----------
+  if ((text || "").trim().startsWith("/nazwa")) {
+    const parts = String(text || "").trim().split(/\s+/);
+    const linkId = Number(parts[1] || 0);
+    const rawName = String(text || "").trim().split(/\s+/).slice(2).join(" ").trim();
+
+    if (!Number.isFinite(linkId) || linkId <= 0 || !rawName) {
+      await tgSend(chatId, lang === "pl"
+        ? "Użycie: /nazwa <ID> <Twoja nazwa>\nPrzykład: /nazwa 116 Oferty iPhone 16\nWyczyszczenie: /nazwa 116 -"
+        : "Usage: /nazwa <ID> <Your name>\nExample: /nazwa 116 iPhone 16 offers\nClear: /nazwa 116 -"
+      );
+      return;
+    }
+
+    // '-' = wyczyść
+    const name = (rawName === "-" ? "" : rawName).slice(0, 60);
+
+    const tgUserId = msg?.from?.id || 0;
+    try {
+      const u = await pool.query("SELECT id FROM users WHERE telegram_user_id=$1 LIMIT 1", [tgUserId]);
+      if (!u.rows.length) {
+        await tgSend(chatId, lang === "pl"
+          ? "ℹ️ Najpierw użyj /start."
+          : "ℹ️ Please use /start first."
+        );
+        return;
+      }
+      const userId = u.rows[0].id;
+
+      const r = await pool.query(
+        "UPDATE links SET label=$1 WHERE id=$2 AND user_id=$3 RETURNING id",
+        [name || null, linkId, userId]
+      );
+      if (!r.rowCount) {
+        await tgSend(chatId, lang === "pl"
+          ? `ℹ️ Nie znaleziono linku o ID ${linkId} na Twoim koncie.`
+          : `ℹ️ Link ID ${linkId} not found in your account.`
+        );
+        return;
+      }
+
+      await tgSend(chatId, lang === "pl"
+        ? (name ? `✅ Ustawiono nazwę dla ID ${linkId}: ${name}` : `✅ Wyczyszczono nazwę dla ID ${linkId}.`)
+        : (name ? `✅ Name set for ID ${linkId}: ${name}` : `✅ Name cleared for ID ${linkId}.`)
+      );
+      return;
+    } catch (e) {
+      await tgSend(chatId, `❌ Error: ${String(e?.message || e)}`);
+      return;
+    }
+  }
+
+  await tgSend(chatId, t(lang, "unknown_command") || (lang === "pl" ? "❓ Nieznana komenda. Użyj /help." : "❓ Unknown command. Use /help."));
+}
+
+async function main() {
+  console.log("telegram-bot.js start");
+  await initDb();
+
+  while (true) {
+    try {
+      const updates = await fetchUpdates();
+      for (const u of updates) {
+        offset = u.update_id + 1;
+        try { await handleUpdate(u); }
+        catch (e) { console.error("handleUpdate error:", e); }
+      }
+    } catch (e) {
+      console.error("polling error:", e);
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+}
+
+main().catch((err) => {
+  console.error("telegram-bot fatal error", err);
+  process.exit(1);
+});

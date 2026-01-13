@@ -1,0 +1,310 @@
+import dotenv from "dotenv";
+dotenv.config();
+
+import fetch from "node-fetch";
+import {
+  initDb,
+  listActiveLinks,
+  deactivateLink,
+  addLink,
+  activateLink,
+} from "./db.js";
+
+const TG = process.env.TELEGRAM_BOT_TOKEN || "";
+
+if (!TG) {
+  console.error("Brak TELEGRAM_BOT_TOKEN w env, wychodzę.");
+  process.exit(1);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function tgSend(chatId, text) {
+  try {
+    await fetch(`https://api.telegram.org/bot${TG}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+      }),
+    });
+  } catch (err) {
+    console.error("Telegram send error:", err.message || err);
+  }
+}
+
+let offset = 0;
+
+/**
+ * Pobiera update'y z Telegrama.
+ * - parsuje JSON
+ * - jeśli jest błąd 409 (konflikt) → loguje i zwraca pustą listę zamiast wywalać pętlę
+ */
+async function fetchUpdates() {
+  const url = new URL(`https://api.telegram.org/bot${TG}/getUpdates`);
+  url.searchParams.set("timeout", "30");
+  if (offset) {
+    url.searchParams.set("offset", String(offset));
+  }
+
+  const res = await fetch(url.href);
+  let data;
+  try {
+    data = await res.json();
+  } catch (err) {
+    throw new Error(`getUpdates JSON parse error: ${err.message}`);
+  }
+
+  if (!data.ok) {
+    // Kluczowe: konflikt 409 (drugi long poll / webhook itp.) – nie rozwalamy pętli
+    if (data.error_code === 409) {
+      console.error(
+        "Telegram getUpdates conflict 409:",
+        data.description || "Conflict"
+      );
+      // krótka pauza, żeby nie spamować logami
+      await sleep(3000);
+      return [];
+    }
+
+    throw new Error(
+      `getUpdates error ${data.error_code}: ${data.description}`
+    );
+  }
+
+  return data.result;
+}
+
+async function handleUpdate(update) {
+  const msg = update.message;
+  if (!msg || !msg.text) return;
+
+  const chatId = msg.chat.id;
+  const text = msg.text.trim();
+
+  console.log("TG message:", chatId, text);
+
+  const [command, ...rest] = text.split(/\s+/);
+  const argText = rest.join(" ").trim();
+
+  if (/^\/start/.test(command) || /^\/help/.test(command)) {
+    await handleHelp(chatId);
+  } else if (/^\/lista/.test(command)) {
+    await handleLista(chatId);
+  } else if (/^\/usun/.test(command)) {
+    await handleUsun(chatId, argText);
+  } else if (/^\/on/.test(command)) {
+    await handleOn(chatId, argText);
+  } else if (/^\/dodaj/.test(command)) {
+    await handleDodaj(chatId, argText);
+  } else if (/^\/status/.test(command)) {
+    await handleStatus(chatId);
+  } else {
+    // nieznana komenda – pokaż pomoc
+    await handleHelp(chatId);
+  }
+}
+
+async function handleHelp(chatId) {
+  const text =
+    "👋 Cześć! To bot FindYourDeal.\n\n" +
+    "Dostępne komendy:\n" +
+    "/lista – pokaż wszystkie AKTYWNE monitorowane linki\n" +
+    "/usun &lt;ID&gt; – wyłącz monitorowanie linku o podanym ID\n" +
+    "/on &lt;ID&gt; – ponownie włącz monitorowanie linku o podanym ID\n" +
+    "/dodaj &lt;url&gt; [nazwa] – dodaj nowy link do monitorowania\n" +
+    "/status – szybkie podsumowanie aktywnych linków\n\n" +
+    "Przykłady:\n" +
+    "<code>/lista</code>\n" +
+    "<code>/status</code>\n" +
+    "<code>/usun 18</code>\n" +
+    "<code>/on 18</code>\n" +
+    "<code>/dodaj https://www.olx.pl/oferty/?q=iphone14 iPhone 14 OLX</code>";
+  await tgSend(chatId, text);
+}
+
+async function handleLista(chatId) {
+  try {
+    const links = await listActiveLinks();
+
+    if (!links.length) {
+      await tgSend(chatId, "Nie masz jeszcze żadnych aktywnych linków.");
+      return;
+    }
+
+    let text = "📋 Aktywne monitorowane linki:\n\n";
+    for (const row of links) {
+      text += `ID <b>${row.id}</b> — ${row.name || "(bez nazwy)"}\n`;
+      text += `<code>${row.url}</code>\n\n`;
+    }
+    text +=
+      "Aby wyłączyć któryś link, użyj:\n<code>/usun ID</code>\nnp. <code>/usun 18</code>";
+
+    await tgSend(chatId, text);
+  } catch (err) {
+    console.error("handleLista error:", err);
+    await tgSend(chatId, "❌ Błąd przy pobieraniu listy linków.");
+  }
+}
+
+async function handleUsun(chatId, argText) {
+  const id = parseInt(argText, 10);
+
+  if (!id) {
+    await tgSend(
+      chatId,
+      "Podaj numer ID linku do wyłączenia, np.:\n<code>/usun 18</code>"
+    );
+    return;
+  }
+
+  try {
+    const row = await deactivateLink(id);
+
+    if (!row) {
+      await tgSend(
+        chatId,
+        `Nie znalazłem linku o ID <b>${id}</b>. Użyj /lista, żeby sprawdzić aktywne ID.`
+      );
+      return;
+    }
+
+    let text = "✅ Wyłączyłem monitorowanie linku:\n\n";
+    text += `ID <b>${row.id}</b> — ${row.name || "(bez nazwy)"}\n`;
+    text += `<code>${row.url}</code>\n\n`;
+    text += "Aktywne linki sprawdzisz komendą:\n<code>/lista</code>";
+
+    await tgSend(chatId, text);
+  } catch (err) {
+    console.error("handleUsun error:", err);
+    await tgSend(chatId, "❌ Błąd przy wyłączaniu linku.");
+  }
+}
+
+async function handleOn(chatId, argText) {
+  const id = parseInt(argText, 10);
+
+  if (!id) {
+    await tgSend(
+      chatId,
+      "Podaj numer ID linku do ponownego włączenia, np.:\n<code>/on 18</code>"
+    );
+    return;
+  }
+
+  try {
+    const row = await activateLink(id);
+
+    if (!row) {
+      await tgSend(
+        chatId,
+        `Nie znalazłem linku o ID <b>${id}</b>. Użyj /lista, żeby sprawdzić aktywne ID.`
+      );
+      return;
+    }
+
+    let text = "✅ Włączyłem monitorowanie linku:\n\n";
+    text += `ID <b>${row.id}</b> — ${row.name || "(bez nazwy)"}\n`;
+    text += `<code>${row.url}</code>\n\n`;
+    text += "Aktywne linki sprawdzisz komendą:\n<code>/lista</code>";
+
+    await tgSend(chatId, text);
+  } catch (err) {
+    console.error("handleOn error:", err);
+    await tgSend(chatId, "❌ Błąd przy włączaniu linku.");
+  }
+}
+
+async function handleDodaj(chatId, argText) {
+  if (!argText) {
+    await tgSend(
+      chatId,
+      "Użycie:\n<code>/dodaj &lt;url&gt; [nazwa]</code>\n\n" +
+        "Przykład:\n" +
+        "<code>/dodaj https://www.olx.pl/oferty/?q=iphone14 iPhone 14 OLX</code>"
+    );
+    return;
+  }
+
+  const parts = argText.split(/\s+/);
+  const url = parts[0];
+  const nameRaw = parts.slice(1).join(" ").trim();
+  const name = nameRaw || null; // null → db.js sam ustawi „Monitorowanie OLX/Vinted”
+
+  if (!url || !/^https?:\/\//i.test(url)) {
+    await tgSend(
+      chatId,
+      "Pierwszy parametr musi być poprawnym URL, np.:\n" +
+        "<code>/dodaj https://www.olx.pl/oferty/?q=iphone14 iPhone 14 OLX</code>"
+    );
+    return;
+  }
+
+  try {
+    const row = await addLink(url, name);
+
+    let text = "✅ Dodałem nowy link do monitorowania:\n\n";
+    text += `ID <b>${row.id}</b> — ${row.name || "(bez nazwy)"}\n`;
+    text += `<code>${row.url}</code>\n\n`;
+    text += "Aktywne linki sprawdzisz komendą:\n<code>/lista</code>";
+
+    await tgSend(chatId, text);
+  } catch (err) {
+    console.error("handleDodaj error:", err);
+    await tgSend(chatId, "❌ Błąd przy dodawaniu linku.");
+  }
+}
+
+async function handleStatus(chatId) {
+  await initDb();
+  const links = await listActiveLinks(); // tylko aktywne linki
+
+  if (!links.length) {
+    await tgSend(chatId, "📊 STATUS\nBrak aktywnych linków do monitorowania.");
+    return;
+  }
+
+  const lines = links.map((L) => {
+    const name = L.name || "(bez nazwy)";
+    return `✅ ID ${L.id} — ${name}\n${L.url}`;
+  });
+
+  const msg =
+    "📊 STATUS BOTA\n" +
+    `Aktywne linki: ${links.length}\n\n` +
+    lines.join("\n\n");
+
+  await tgSend(chatId, msg);
+}
+
+async function main() {
+  await initDb();
+  console.log(
+    "Telegram bot start (komendy /lista, /usun, /on, /dodaj, /status)"
+  );
+
+  while (true) {
+    try {
+      const updates = await fetchUpdates();
+      if (updates.length) {
+        for (const u of updates) {
+          offset = u.update_id + 1;
+          await handleUpdate(u);
+        }
+      }
+    } catch (err) {
+      console.error("Telegram loop error:", err);
+      await sleep(5000);
+    }
+  }
+}
+
+main().catch((err) => {
+  console.error("Fatal error:", err);
+  process.exit(1);
+});

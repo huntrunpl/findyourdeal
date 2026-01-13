@@ -1,0 +1,149 @@
+import { pool } from "@/lib/db";
+import { getSessionUserId } from "@/lib/auth";
+import { startCheckout } from "./actions";
+import TopBar from "../_components/TopBar";
+
+export const dynamic = "force-dynamic";
+
+function formatWarsaw(dt: any) {
+  if (!dt) return null;
+  const d = dt instanceof Date ? dt : new Date(dt);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat("pl-PL", {
+    timeZone: "Europe/Warsaw",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(d);
+}
+
+export default async function BillingPage() {
+  const sessionUserId = await getSessionUserId();
+  if (!sessionUserId) return null;
+
+  const entQ = await pool.query(
+    `
+    SELECT plan_code, expires_at, links_limit_total
+    FROM user_entitlements_v
+    WHERE user_id = $1
+    LIMIT 1
+    `,
+    [sessionUserId]
+  );
+  const ent = entQ.rows[0] || null;
+
+  const userQ = await pool.query(
+    `SELECT id, telegram_user_id, stripe_customer_id
+     FROM users
+     WHERE id=$1
+     LIMIT 1`,
+    [sessionUserId]
+  );
+  const user = userQ.rows[0] || null;
+
+  const enabledQ = await pool.query(`SELECT COUNT(*)::int AS cnt FROM links WHERE user_id=$1 AND active=true`, [sessionUserId]);
+  const enabledCount = Number(enabledQ.rows[0]?.cnt ?? 0);
+  const limitTotal = Number(ent?.links_limit_total ?? 0);
+
+  // ostatnie webhooki “tego usera” – po customer_id lub metadata.user_id
+  const stripeCustomerId = user?.stripe_customer_id ? String(user.stripe_customer_id) : null;
+
+  const eventsQ = await pool.query(
+    `
+    SELECT event_id, type, status, attempts, received_at, processed_at, left(coalesce(last_error,''), 200) AS last_error
+    FROM stripe_webhook_events
+    WHERE
+      (
+        (payload #>> '{data,object,metadata,user_id}')::bigint = $1
+      )
+      OR (
+        $2::text IS NOT NULL AND (
+          (payload #>> '{data,object,customer}') = $2::text
+          OR (payload #>> '{data,object,customer,id}') = $2::text
+        )
+      )
+    ORDER BY received_at DESC
+    LIMIT 20
+    `,
+    [sessionUserId, stripeCustomerId]
+  );
+
+  return (
+    <main className="p-6 space-y-6">
+      <TopBar
+        title="Rozliczenia"
+        current="billing"
+        planCode={String(ent?.plan_code || "free")}
+        expiresAtLabel={ent?.expires_at ? formatWarsaw(ent.expires_at) : null}
+        enabledCount={enabledCount}
+        limitTotal={limitTotal}
+      />
+
+      <p className="text-sm opacity-70">
+        Zmień plan przez Stripe oraz podejrzyj ostatnie zdarzenia webhook dla Twojego konta.
+      </p>
+
+      <section className="border rounded p-4 space-y-3">
+        <h2 className="font-semibold">Zmień plan</h2>
+
+        <form action={startCheckout} className="flex gap-3 items-end flex-wrap">
+          <div className="flex flex-col">
+            <label className="text-xs opacity-70">Wybierz plan</label>
+            <select name="plan_code" defaultValue="growth" className="border rounded px-3 py-2">
+              <option value="starter">Starter</option>
+              <option value="growth">Growth</option>
+              <option value="platinum">Platinum</option>
+            </select>
+          </div>
+
+          <button className="border rounded px-4 py-2">Przejdź do płatności (Stripe)</button>
+
+          <div className="text-xs opacity-60">
+            Po płatności wrócisz na <code>/billing/success</code>.
+          </div>
+        </form>
+      </section>
+
+      <section className="border rounded p-4 space-y-3">
+        <h2 className="font-semibold">Ostatnie webhooki Stripe (dla tego konta)</h2>
+
+        <div className="overflow-auto border rounded">
+          <table className="min-w-[900px] w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr className="text-left">
+                <th className="p-3">Odebrano</th>
+                <th className="p-3">Typ</th>
+                <th className="p-3">Status</th>
+                <th className="p-3">Próby</th>
+                <th className="p-3">ID zdarzenia</th>
+                <th className="p-3">Błąd</th>
+              </tr>
+            </thead>
+            <tbody>
+              {eventsQ.rows.map((e: any) => (
+                <tr key={e.event_id} className="border-t align-top">
+                  <td className="p-3 whitespace-nowrap">{formatWarsaw(e.received_at) ?? "-"}</td>
+                  <td className="p-3 font-mono">{e.type}</td>
+                  <td className="p-3">{e.status}</td>
+                  <td className="p-3 font-mono">{e.attempts}</td>
+                  <td className="p-3 font-mono">{e.event_id}</td>
+                  <td className="p-3 text-xs opacity-80">{e.last_error || ""}</td>
+                </tr>
+              ))}
+              {!eventsQ.rows.length && (
+                <tr>
+                  <td className="p-6 opacity-70" colSpan={6}>
+                    Brak zdarzeń dla tego konta.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  );
+}

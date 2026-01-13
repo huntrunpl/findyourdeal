@@ -1,0 +1,15 @@
+# 1) podejrzyj env w api (price IDs)
+docker compose exec -T api sh -lc 'env | egrep "STRIPE_PRICE_(ADDON10|STARTER|GROWTH|PLATINUM)"'
+
+# 2) test checkout addon10 (ma dać 303 + Location do Stripe)
+curl -sS -I "https://api.findyourdeal.app/api/store/stripe/checkout?addon=addon10" | head -n 20
+
+# 3) weź najnowszy nieużyty token addon10 z bazy
+TOK="$(docker compose exec -T db psql -U fyd -d fyd -tA -c "SELECT token FROM activation_tokens WHERE provider='stripe' AND provider_ref LIKE 'addon10:%' AND used_at IS NULL ORDER BY expires_at DESC LIMIT 1;")"
+echo "/start act_${TOK}"
+
+# 4) sprawdź ile addonów ma user (tu user_id=1)
+docker compose exec -T db psql -U fyd -d fyd -c "SELECT addon_qty FROM subscriptions WHERE user_id=1 AND status='active';"
+
+# 5) logi tg-bot
+docker compose logs --tail=120 tg-bot
