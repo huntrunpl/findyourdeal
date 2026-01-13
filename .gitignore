@@ -50,3 +50,22 @@ _hotfix/
 _runlogs/
 panel_backup/
 testy/
+
+# ignore marker junk files in root
+=
+CACHED
+[api
+[api]
+[internal]
+[worker
+[worker]
+exporting
+reading
+writing
+transferring
+resolving
+naming
+node
+none
+normalize
+jeśli
