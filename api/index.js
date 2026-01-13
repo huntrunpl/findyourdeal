@@ -34,7 +34,6 @@ async function countEnabledLinksForUserId(userId) {
 // ===== /FYD_COMPAT_AUTOFIX =====
 
 
-import dotenv from "dotenv";
 import express from "express";
 
 import pg__fyd from "pg";

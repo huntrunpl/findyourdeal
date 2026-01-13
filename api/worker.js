@@ -71,8 +71,6 @@ function __fydFixVintedItems(items) {
   return items.map((it) => __fydEnsureVintedItemFields(it));
 }
 
-import dotenv from "dotenv";
-dotenv.config();
 
 
 // ---- FYD_LINK_FILTERS_V2 (auto) ----
