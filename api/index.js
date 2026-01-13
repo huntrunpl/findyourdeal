@@ -19,16 +19,15 @@ import express from "express";
 import { makeRequireUser } from "./panel-dev-auth.js";
 import { createTelegramClient } from "./telegram.js";
 import { createLinkCounters } from "./link-counters.js";
-import pg__fyd from "pg";
-const { Pool: Pool__fyd } = pg__fyd;
-
+import pg from "pg";
+const { Pool } = pg;
 // FYD hotfix: db dla endpointów używających db.query(...)
 const db =
-  globalThis.__FYD_API_DB__ ||
-  (globalThis.__FYD_API_DB__ =
+  globalThis.__FYD_DB__ ||
+  (globalThis.__FYD_DB__ =
     process.env.DATABASE_URL
-      ? new Pool__fyd({ connectionString: process.env.DATABASE_URL })
-      : new Pool__fyd());
+      ? new Pool({ connectionString: process.env.DATABASE_URL })
+      : new Pool());
 
 // sqlPool alias: używamy jednej puli DB w całym pliku
 const sqlPool = db;
@@ -272,7 +271,6 @@ async function handleStripeEvent(sqlPool, event) {
   // checkout.session.completed
   if (t === "checkout.session.completed") {
     
-    // __FYD_STRIPE_IDEMPOTENCY_V1__
     try {
       const sessionObj = event && event.data && event.data.object ? event.data.object : null;
       const idemK = (sessionObj && sessionObj.payment_intent) ? `pi:${sessionObj.payment_intent}`
@@ -562,7 +560,6 @@ app.post("/billing/stripe/checkout", async (req, res) => {
 
     const session = await ensureStripe().checkout.sessions.create({
 
-      // __FYD_CHECKOUT_META_PATCH_V1__
       allow_promotion_codes: true,
       ...(() => {
         const uid =
@@ -1035,17 +1032,17 @@ const FYD_PLAN_ID_STARTER  = 2; // basic/starter
 const FYD_PLAN_ID_GROWTH   = 3; // pro/growth
 const FYD_PLAN_ID_PLATINUM = 4; // platinum
 
-let __fydStripeCheckout = null;
+let stripeCheckoutClient = null;
 function fydStripeCheckout() {
-  if (__fydStripeCheckout) return __fydStripeCheckout;
+  if (stripeCheckoutClient) return stripeCheckoutClient;
   const key =
     process.env.STRIPE_FYD_SECRET_KEY ||
     process.env.STRIPE_SECRET_KEY ||
     process.env.STRIPE_API_KEY ||
     "";
   if (!key) throw new Error("missing STRIPE_SECRET_KEY");
-  __fydStripeCheckout = new Stripe(key, { apiVersion: "2024-06-20" });
-  return __fydStripeCheckout;
+  stripeCheckoutClient = new Stripe(key, { apiVersion: "2024-06-20" });
+  return stripeCheckoutClient;
 }
 
 function withSessionId(url) {
@@ -1087,7 +1084,6 @@ app.get("/api/store/stripe/checkout", async (req, res) => {
 
     const session = await stripe.checkout.sessions.create({
 
-      // __FYD_CHECKOUT_META_PATCH_V1__
       allow_promotion_codes: true,
       ...(() => {
         const uid =
@@ -1250,7 +1246,6 @@ stripe = await fydStripe();
 
     const session = await ensureStripe().checkout.sessions.create({
 
-      // __FYD_CHECKOUT_META_PATCH_V1__
       allow_promotion_codes: true,
       ...(() => {
         const uid =
