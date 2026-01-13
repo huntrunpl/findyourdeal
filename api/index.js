@@ -5,6 +5,7 @@ import {
   getUserWithPlanByTelegramId,
   getUserEntitlementsByTelegramId
 } from "./db.js";
+import { registerStripeWebhookRoutes } from "./stripe-webhook.js";
 import Stripe from "stripe";
 const stripeApi = new Stripe(process.env.STRIPE_SECRET_KEY || process.env.STRIPE_API_KEY || "", { apiVersion: "2023-10-16" });
 
@@ -305,10 +306,10 @@ app.post(
         event = JSON.parse(raw.toString("utf8") || "{}");
       }
 
-      if (event.type !== "checkout.session.completed") return res.sendStatus(200);
+      if (event.type !== "checkout.session.completed") return;
 
       const session = event?.data?.object;
-      if (!session || session.mode !== "subscription") return res.sendStatus(200);
+      if (!session || session.mode !== "subscription") return;
 
       const subId = session.subscription || "";
       const customerId = session.customer || "";
@@ -319,7 +320,7 @@ app.post(
       const addonPacks = parseInt(meta.fyd_addon_packs || "0", 10) || 0;
       const activationToken = String(meta.fyd_activation_token || "").trim();
 
-      if (!subId || !planId) return res.sendStatus(200);
+      if (!subId || !planId) return;
 
       const providerRef =
         `sub:${subId}|customer:${customerId || "?"}|addon_packs=${addonPacks}|cs:${csId || "?"}`;
@@ -341,7 +342,7 @@ app.post(
             [activationToken, providerRef]
           );
           console.log(`[stripe-fyd] TOKEN_CONFIRMED=${activationToken} sub=${subId} plan_id=${planId} addon_packs=${addonPacks}`);
-          return res.sendStatus(200);
+          return;
         }
 
         await db.query(
@@ -350,7 +351,7 @@ app.post(
           [activationToken, planId, providerRef]
         );
         console.log(`[stripe-fyd] TOKEN_INSERTED_FROM_META=${activationToken} sub=${subId} plan_id=${planId} addon_packs=${addonPacks}`);
-        return res.sendStatus(200);
+        return;
       }
 
       const { randomBytes } = await import("node:crypto");
@@ -363,7 +364,7 @@ app.post(
       );
 
       console.log(`[stripe-fyd] TOKEN_CREATED=${token} sub=${subId} plan_id=${planId} addon_packs=${addonPacks}`);
-      return res.sendStatus(200);
+      return;
     } catch (e) {
       console.log("[stripe-fyd] webhook error", e?.message || e);
       return res.sendStatus(500);
@@ -413,7 +414,7 @@ async function handleStripeEvent(sqlPool, event) {
       );
       if (!rr || !rr.rowCount) {
         console.log("[stripe] duplicate event ignored", { t, idemK, eventId: event.id });
-        return res.sendStatus(200);
+        return;
       }
     } catch (e) {
       console.error("[stripe] idempotency insert failed", e?.message || e);
@@ -553,7 +554,7 @@ const session = event.data.object;
       
       // __FYD_ADDON_INVOICE_SKIP_V1__
       console.log("[stripe] addon invoice ignored (handled by checkout.session.completed)");
-      return res.sendStatus(200);
+      return;
 try {
         const inv = await stripeApi.invoices.retrieve(invoiceId, { expand: ["lines.data.price"] });
 
@@ -614,81 +615,8 @@ try {
   // inne eventy: logujemy w DB i kończymy
 }
 
-async function stripeWebhookRoute(req, res) {
-  const sig = req.headers["stripe-signature"];
-  const whsec = process.env.STRIPE_WEBHOOK_SECRET || "";
-  if (!sig || !whsec) return res.status(400).send("Missing stripe signature/secret");
 
-  let event;
-  try {
-    event = stripeApi.webhooks.constructEvent(req.body, sig, whsec);
-  } catch (e) {
-    console.error("[stripe] signature error:", e?.message || e);
-    return res.status(400).send("Bad signature");
-  }
-
-  const eventId = String(event.id || "");
-  const eventType = String(event.type || "");
-  const apiVersion = event.api_version ? String(event.api_version) : null;
-  const liveMode = typeof event.livemode === "boolean" ? event.livemode : null;
-  const eventCreated = event.created ? new Date(Number(event.created) * 1000) : null;
-
-  console.log(`[stripe] webhook in: ${eventType} ${eventId}`);
-
-  // payload JSON do DB (opcjonalnie)
-  let payloadObj = null;
-  try {
-    payloadObj = JSON.parse(Buffer.isBuffer(req.body) ? req.body.toString("utf8") : String(req.body || ""));
-  } catch (_) {
-    payloadObj = null;
-  }
-
-  try {
-    // UPSERT + idempotencja po status=processed
-    const q = `
-      INSERT INTO stripe_webhook_events
-        (event_id, type, livemode, api_version, event_created, payload, attempts, status)
-      VALUES
-        ($1, $2, $3, $4, $5, $6, 1, 'received')
-      ON CONFLICT (event_id) DO UPDATE SET
-        attempts    = stripe_webhook_events.attempts + 1,
-        received_at = now(),
-        type        = EXCLUDED.type,
-        livemode    = EXCLUDED.livemode,
-        api_version = EXCLUDED.api_version,
-        event_created = COALESCE(EXCLUDED.event_created, stripe_webhook_events.event_created),
-        payload     = COALESCE(EXCLUDED.payload, stripe_webhook_events.payload)
-      RETURNING status, attempts;
-    `;
-    const ins = await db.query(q, [eventId, eventType, liveMode, apiVersion, eventCreated, payloadObj]);
-    const currentStatus = ins.rows[0]?.status || "received";
-
-    if (currentStatus === "processed") {
-      // idempotencja: już przetworzone, ale odnotuj ponowną dostawę (resend)
-      try { await markWebhookProcessed(sqlPool, eventId); } catch (_) {}
-      return res.json({ ok: true });
-    }
-
-    // oznacz jako processing (opcjonalnie, ale czytelne)
-    await db.query(
-      `UPDATE stripe_webhook_events SET status='processing' WHERE event_id=$1 AND status<>'processed'`,
-      [eventId]
-    );
-
-    await handleStripeEvent(sqlPool, event);
-
-    await markWebhookProcessed(sqlPool, eventId);
-    return res.json({ ok: true });
-  } catch (e) {
-    console.error("[stripe] webhook error:", e);
-    try { await markWebhookError(sqlPool, eventId, e); } catch (_) {}
-    return res.status(500).json({ ok: false });
-  }
-}
-
-// dwa endpointy → jeden wspólny handler (żeby nie było rozjazdów)
-app.post("/stripe/webhook", express.raw({ type: "application/json" }), stripeWebhookRoute);
-app.post("/billing/stripe/webhook", express.raw({ type: "application/json" }), stripeWebhookRoute);
+registerStripeWebhookRoutes(app, express, { db, sqlPool, stripeApi, handleStripeEvent, markWebhookProcessed, markWebhookError });
 
 // JSON dla reszty API (webhook musi być wyżej)
 
@@ -1276,9 +1204,9 @@ app.post(
 
       console.log(`[woocommerce] order="${orderId}" status="${status}" skus=${(skus||[]).join(",")} paid=${isPaid} planId=${planId} addonPacks=${addonPacks}`);
 
-      if (!orderId) return res.sendStatus(200);          // bez order_id nic nie robimy
-      if (!isPaid)  return res.sendStatus(200);          // nieopłacone -> ignorujemy
-      if (!planId)  return res.sendStatus(200);          // nieznane SKU -> ignorujemy
+      if (!orderId) return;          // bez order_id nic nie robimy
+      if (!isPaid)  return;          // nieopłacone -> ignorujemy
+      if (!planId)  return;          // nieznane SKU -> ignorujemy
 
       const db = await wcDb();
 
@@ -1289,7 +1217,7 @@ app.post(
       );
       if (exists.rowCount > 0) {
         console.log(`[woocommerce] activation token already exists for order=${orderId} token=${exists.rows[0].token}`);
-        return res.sendStatus(200);
+        return;
       }
 
       const token = await wcRandomToken();
@@ -1299,10 +1227,10 @@ app.post(
       );
 
       console.log(`[woocommerce] ACTIVATION_TOKEN=${token} (order=${orderId})`);
-      return res.sendStatus(200);
+      return;
     } catch (e) {
       console.log("[woocommerce] error", e && e.message ? e.message : e);
-      return res.sendStatus(200); // webhook zawsze 200, żeby WC nie spamował retry
+      return; // webhook zawsze 200, żeby WC nie spamował retry
     }
   }
 );
