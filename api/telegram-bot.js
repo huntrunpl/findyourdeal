@@ -9,6 +9,7 @@ import { stripeGet, stripePostForm } from "./src/bot/stripe.js";
 import { getPlanIdByCode, planLabel, nowPlusMinutes, createActivationToken, createPlanCheckoutSession, createAddon10CheckoutSession } from "./src/bot/plans.js";
 import { dedupePanelLoginUrlText, appendUrlFromKeyboard } from "./src/bot/text-normalize.js";
 import { FYD_DEFAULT_LANG, FYD_SUPPORTED_LANGS, isSupportedLang } from "./src/bot/i18n.js";
+import { hasColumn } from "./src/bot/schema-cache.js";
 const { Pool } = pg;
 
 import { t, normalizeLang, langLabel, buildLanguageKeyboard } from "./i18n.js";
@@ -102,29 +103,6 @@ async function dbQuery(sql, params = []) {
 
 
 
-
-// ---------- schema cache ----------
-const __colCache = new Map(); // key: "table.column" -> boolean
-async function hasColumn(table, column) {
-  const key = `${table}.${column}`;
-  if (__colCache.has(key)) return __colCache.get(key);
-
-  try {
-    const r = await dbQuery(
-      `SELECT 1
-       FROM information_schema.columns
-       WHERE table_schema='public' AND table_name=$1 AND column_name=$2
-       LIMIT 1`,
-      [String(table), String(column)]
-    );
-    const ok = !!r.rowCount;
-    __colCache.set(key, ok);
-    return ok;
-  } catch {
-    __colCache.set(key, false);
-    return false;
-  }
-}
 
 // ---------- language read/write (panel <-> tg) ----------
 async function getUserLangByUserId(userId) {
