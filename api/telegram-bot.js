@@ -368,6 +368,15 @@ async function fixInlineButtonsI18n(payload) {
   }
 }
 
+const { messageWantsPreviewOn, tgCall, tgSend, tgAnswerCb } = createTg({
+  TG,
+  fetchFn: fetch,
+  dbQuery,
+  fixInlineButtonsI18n,
+  dedupePanelLoginUrlText,
+  appendUrlFromKeyboard,
+});
+
 // ---------- telegram call ----------
 
 
