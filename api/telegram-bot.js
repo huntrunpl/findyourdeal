@@ -4,7 +4,7 @@ import fetch from "node-fetch";
 import { randomBytes } from "node:crypto";
 import pg from "pg";
 import { sleep, escapeHtml, normLang } from "./src/bot/utils.js";
-import { messageWantsPreviewOn, tgCall, tgSend, tgAnswerCb } from "./src/bot/tg.js";
+import { createTg } from "./src/bot/tg.js";
 const { Pool } = pg;
 
 import { t, normalizeLang, langLabel, buildLanguageKeyboard } from "./i18n.js";
@@ -419,6 +419,15 @@ function appendUrlFromKeyboard(text, payload) {
     return String(text ?? "");
   }
 }
+
+const { messageWantsPreviewOn, tgCall, tgSend, tgAnswerCb } = createTg({
+  TG,
+  fetchFn: fetch,
+  dbQuery,
+  fixInlineButtonsI18n,
+  dedupePanelLoginUrlText,
+  appendUrlFromKeyboard,
+});
 
 // ---------- telegram call ----------
 
