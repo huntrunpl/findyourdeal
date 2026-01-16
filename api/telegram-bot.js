@@ -2398,9 +2398,13 @@ async function main() {
     }
   }
 }
-
-main().catch((err) => {
-  console.error("telegram-bot fatal error", err);
+// ---- run only when executed directly (no side-effects on import) ----
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((e) => {
+    console.error("telegram-bot fatal error", e);
+    process.exit(1);
+  });
+}
   process.exit(1);
 });
 
