@@ -1,18 +1,7 @@
-import pkg from "pg";
 import { DEFAULT_LANG, normalizeLang } from "./i18n.js";
-const { Pool } = pkg;
+import { pool } from "./src/db/pool.js";
 
 const SUPPORTED_LANGS = new Set(["pl","en","de","fr","es","it","pt","ro","nl","cs","sk","hu","hr","sr","bs","uk","ru"]);
-const pool = process.env.DATABASE_URL
-  ? new Pool({ connectionString: process.env.DATABASE_URL })
-  : new Pool({
-      host: process.env.PGHOST,
-      port: process.env.PGPORT ? Number(process.env.PGPORT) : undefined,
-      user: process.env.PGUSER,
-      password: process.env.PGPASSWORD,
-      database: process.env.PGDATABASE,
-    });
-
 function detectSource(urlString) {
   try {
     const u = new URL(urlString);
