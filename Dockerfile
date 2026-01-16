@@ -10,5 +10,6 @@ RUN npm install --omit=dev
 
 # kopiujemy cały kod api + worker
 COPY api/ /app/api/
-
-CMD ["npm", "run", "start"]
+HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:3000/health || exit 1
+CMD ["node", "index.js"]

@@ -16,6 +16,10 @@ console.warn("[MARK] index.js start", new Date().toISOString());
 
 import express from "express";
 
+// Express app (musi być przed pierwszym app.post/app.use)
+const app = express();
+
+
 import { makeRequireUser } from "./panel-dev-auth.js";
 import { createTelegramClient } from "./telegram.js";
 import { createLinkCounters } from "./link-counters.js";
@@ -1143,7 +1147,7 @@ app.get("/api/store/stripe/checkout", async (req, res) => {
 });
 
 // =================== /STRIPE CHECKOUT (subscriptions) – FindYourDeal ===================
-
+app.get('/health', (_req, res) => res.status(200).send('ok'));
 app.listen(port, "0.0.0.0", () => console.log("API listening on " + port));
 });
 
@@ -1303,3 +1307,10 @@ mode: "subscription",
 });
 // =================== /STRIPE CHECKOUT ADDON10 (Platinum only) ===================
 
+const shutdown = (signal) => {
+  console.log(`[SHUTDOWN] ${signal} received`);
+  process.exit(0);
+};
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
