@@ -55,13 +55,5 @@ function appendUrlFromKeyboard(text, payload) {
   }
 }
 
-const { messageWantsPreviewOn, tgCall, tgSend, tgAnswerCb } = createTg({
-  TG,
-  fetchFn: fetch,
-  dbQuery,
-  fixInlineButtonsI18n,
-  dedupePanelLoginUrlText,
-  appendUrlFromKeyboard,
-});
 
 export { dedupePanelLoginUrlText, appendUrlFromKeyboard };
