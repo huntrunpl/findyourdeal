@@ -8,6 +8,7 @@ import { createTg } from "./src/bot/tg.js";
 import { stripeGet, stripePostForm } from "./src/bot/stripe.js";
 import { getPlanIdByCode, planLabel, nowPlusMinutes, createActivationToken, createPlanCheckoutSession, createAddon10CheckoutSession } from "./src/bot/plans.js";
 import { dedupePanelLoginUrlText, appendUrlFromKeyboard } from "./src/bot/text-normalize.js";
+import { FYD_DEFAULT_LANG, FYD_SUPPORTED_LANGS, isSupportedLang } from "./src/bot/i18n.js";
 const { Pool } = pg;
 
 import { t, normalizeLang, langLabel, buildLanguageKeyboard } from "./i18n.js";
@@ -101,26 +102,6 @@ async function dbQuery(sql, params = []) {
 
 
 
-// ---------- i18n (language list) ----------
-const FYD_DEFAULT_LANG = "en";
-const FYD_SUPPORTED_LANGS = [
-  { code: "pl", name: "Polski", flag: "🇵🇱" },
-  { code: "en", name: "English", flag: "🇬🇧" },
-  { code: "de", name: "Deutsch", flag: "🇩🇪" },
-  { code: "fr", name: "Français", flag: "🇫🇷" },
-  { code: "es", name: "Español", flag: "🇪🇸" },
-  { code: "it", name: "Italiano", flag: "🇮🇹" },
-  { code: "pt", name: "Português", flag: "🇵🇹" },
-  { code: "ro", name: "Română", flag: "🇷🇴" },
-  { code: "nl", name: "Nederlands", flag: "🇳🇱" },
-  { code: "cs", name: "Čeština", flag: "🇨🇿" },
-  { code: "sk", name: "Slovenčina", flag: "🇸🇰" },
-];
-
-function isSupportedLang(l) {
-  return FYD_SUPPORTED_LANGS.some((x) => x.code === l);
-}
-// ---------- i18n END ----------
 
 // ---------- schema cache ----------
 const __colCache = new Map(); // key: "table.column" -> boolean
