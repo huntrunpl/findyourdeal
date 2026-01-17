@@ -113,6 +113,7 @@ function __fydProxyEnabledBool() {
 
 // ---- OLX CloudFront backoff (global) ----
 if (globalThis.__olxBackoffUntil == null) globalThis.__olxBackoffUntil = 0;
+if (globalThis.__olxCloudfrontHits == null) globalThis.__olxCloudfrontHits = 0;
 // ---- OLX CloudFront backoff END ----
 // ---- FORCE OLX WWW (disable m.olx.pl) ----
 function __fixOlxUrl(u) {
@@ -806,16 +807,20 @@ function logDebug(...args) {
 // ---- OLX CloudFront backoff helper ----
 async function __olxCloudfrontMaybeBackoff(page) {
   const now = Date.now();
-  const backoffMs = parseInt(process.env.OLX_BACKOFF_MS || "600000", 10);
   const until = globalThis.__olxBackoffUntil || 0;
   if (now < until) throw new Error("OLX_BACKOFF_ACTIVE");
 
   const title = String((await page.title().catch(() => "")) || "");
   const t = title.toLowerCase();
   if (t.includes("request could not be satisfied")) {
-    globalThis.__olxBackoffUntil = Date.now() + backoffMs;
-    console.log(`[olx] OLX_CLOUDFRONT_BLOCK backoff_ms=${backoffMs} title=${title}`);
-    await page.close().catch(() => {});
+    const hits = (globalThis.__olxCloudfrontHits = (globalThis.__olxCloudfrontHits || 0) + 1);
+    console.log("[olx] OLX_CLOUDFRONT_BLOCK_DETECTED hits=" + hits + " title=" + title);
+    const backoffMs = parseInt(process.env.OLX_BACKOFF_MS || "600000", 10);
+    if (hits >= 3) {
+      globalThis.__olxBackoffUntil = Date.now() + backoffMs;
+      globalThis.__olxCloudfrontHits = 0;
+      console.log("[olx] OLX_BACKOFF_SET ms=" + backoffMs);
+    }
     throw new Error("OLX_CLOUDFRONT_BLOCK");
   }
 }
@@ -2079,7 +2084,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
         console.log(`[olx] after_goto title=${__t} cards=${__cards} offerLinks=${__offers} url=${__u}`);
 
     await __olxCloudfrontMaybeBackoff(page);
-        if (String(__t || "").toLowerCase().includes("request could not be satisfied")) throw new Error("OLX blocked (cloudfront)");
+        globalThis.__olxCloudfrontHits = 0;
         // __FYD_OLX_FAST_RETURN_V10__
         try {
           if (typeof page !== "undefined" && page && page.$$eval) {
@@ -2116,7 +2121,6 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
   const __u = page.url();
   const __c = await page.locator('div[data-cy="l-card"]').count().catch(()=>-1);
   console.log(`[olx] after_goto title=${__t} cards=${__c} url=${__u}`);
-  if (String(__t || "").toLowerCase().includes("request could not be satisfied")) throw new Error("OLX blocked (cloudfront)");
   // __FYD_OLX_FAST_RETURN_V10__
   try {
     if (typeof page !== "undefined" && page && page.$$eval) {
