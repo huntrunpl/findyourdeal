@@ -1971,11 +1971,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
 
     const browser = await chromium.launch(launchOpts);
     const context = await browser.newContext({
-  proxy: __fydProxyEnabledBool() ? {
-    server: String(process.env.PROXY_SERVER || "").trim(),
-    username: String(process.env.PROXY_USERNAME || process.env.PROXY_USER || "").trim(),
-    password: String(process.env.PROXY_PASSWORD || process.env.PROXY_PASS || "").trim(),
-  } : undefined,
+  proxy: (useProxy && __fydProxyOpts) ? __fydProxyOpts : undefined,
 
       locale: "pl-PL",
       timezoneId: "Europe/Warsaw",
@@ -2030,7 +2026,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
   let lastErr = null;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const useProxy = __fydProxyEnabledBool(); // FYD: OLX zawsze bez proxy // 2: z proxy (fallback), 1 i 3: bez proxy
+    const useProxy = false; // FYD: OLX zawsze bez proxy (global)
     console.log(`[olx] attempt ${attempt}/3 START (proxy=${useProxy ? "on" : "off"}) url=${normalizeOlxUrl(normalizeOlxUrl(url))}`);
 
     const __now = Date.now();
