@@ -19,6 +19,8 @@ import { createPollingRunner } from "./src/bot/updates/polling.js";
 import { createHistoryHandlers } from "./src/bot/commands/history.js";
 import { createFiltersHandlers } from "./src/bot/commands/filters.js";
 import { createAdminHandlers } from "./src/bot/commands/admin.js";
+import { createNazwaHandler } from "./src/bot/commands/nazwa.js";
+import { createPlanHandlers } from "./src/bot/commands/plans.js";
 import { handleList as handleListCmd, handleAdd as handleAddCmd, handleRemove as handleRemoveCmd } from "./src/bot/commands/links.js";
 import { createHandlePanel } from "./src/bot/commands/panel.js";
 import { createHandleStatus } from "./src/bot/commands/status.js";
@@ -294,46 +296,13 @@ const handleStatus = createHandleStatus({
 });
 
 // ---------- /nazwa ----------
-async function handleNazwa(msg, user) {
-  const chatId = String(msg.chat.id);
-  const lang = await fydResolveLang(chatId, user, msg?.from?.language_code || "");
+const handleNazwa = createNazwaHandler({
+  tgSend: (...a) => tgSend(...a),
+  escapeHtml,
+  fydResolveLang: (...a) => fydResolveLang(...a),
+  dbQuery,
+});
 
-  const raw = String(msg.text || "").trim();
-  const parts = raw.split(/\s+/);
-  const linkId = Number(parts[1] || 0);
-  const rawName = parts.slice(2).join(" ").trim();
-
-  if (!Number.isFinite(linkId) || linkId <= 0 || !rawName) {
-    await tgSend(chatId, lang === "pl"
-      ? "Użycie: /nazwa <ID> <Twoja nazwa>\nPrzykład: /nazwa 116 Oferty iPhone 16\nWyczyszczenie: /nazwa 116 -"
-      : "Usage: /nazwa <ID> <Your name>\nExample: /nazwa 116 iPhone 16 offers\nClear: /nazwa 116 -"
-    );
-    return;
-  }
-
-  const name = (rawName === "-" ? "" : rawName).slice(0, 60);
-
-  try {
-    const r = await dbQuery(
-      "UPDATE links SET name=$1, label=$1 WHERE id=$2 AND user_id=$3 RETURNING id",
-      [name || null, linkId, Number(user.id)]
-    );
-    if (!r.rowCount) {
-      await tgSend(chatId, lang === "pl"
-        ? `ℹ️ Nie znaleziono linku o ID ${linkId} na Twoim koncie.`
-        : `ℹ️ Link ID ${linkId} not found in your account.`
-      );
-      return;
-    }
-
-    await tgSend(chatId, lang === "pl"
-      ? (name ? `✅ Ustawiono nazwę dla ID ${linkId}: ${escapeHtml(name)}` : `✅ Wyczyszczono nazwę dla ID ${linkId}.`)
-      : (name ? `✅ Name set for ID ${linkId}: ${escapeHtml(name)}` : `✅ Name cleared for ID ${linkId}.`)
-    );
-  } catch (e) {
-    await tgSend(chatId, `❌ Error: ${escapeHtml(String(e?.message || e))}`);
-  }
-}
 
 // ---------- admin handlers ----------
 const { handleTechnik, handleUsunUzytkownika, handleDajAdmina } = createAdminHandlers({
