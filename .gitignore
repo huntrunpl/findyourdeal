@@ -71,3 +71,7 @@ jeśli
 \[worker\]
 api/index.js.bad.*
 _archive_backups_*/
+
+# local archives / backups (must never go to git)
+_archive/
+*.env*
