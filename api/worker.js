@@ -3134,4 +3134,14 @@ async function main() {
   }
 }
 
-main().catch((e) => { console.error("FATAL in worker main:", e); });
+const __FYD_WORKER_IS_ENTRY = (() => {
+  try {
+    return import.meta.url === new URL(process.argv[1], "file:").href;
+  } catch {
+    return false;
+  }
+})();
+
+if (__FYD_WORKER_IS_ENTRY) {
+  main().catch((e) => { console.error("FATAL in worker main:", e); });
+}
