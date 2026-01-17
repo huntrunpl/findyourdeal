@@ -111,17 +111,6 @@ function __fydProxyEnabledBool() {
 
 
 
-// ---- FYD proxy flag (1/true/yes/on) ----
-const __FYD_PROXY_ENABLED = (() => {
-  const v = String(process.env.PROXY_ENABLED || "").trim().toLowerCase();
-  return (v === "1" || v === "true" || v === "yes" || v === "on");
-})();
-
-// normalize for legacy checks expecting "1"
-process.env.PROXY_ENABLED = __FYD_PROXY_ENABLED ? "1" : "0";
-
-console.log(`[proxy] enabled=${__FYD_PROXY_ENABLED} server=${String(process.env.PROXY_SERVER || "").trim()}`);
-
 // ---- OLX CloudFront backoff (global) ----
 if (globalThis.__olxBackoffUntil == null) globalThis.__olxBackoffUntil = 0;
 // ---- OLX CloudFront backoff END ----
@@ -1982,7 +1971,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
 
     const browser = await chromium.launch(launchOpts);
     const context = await browser.newContext({
-  proxy: __FYD_PROXY_ENABLED ? {
+  proxy: __fydProxyEnabledBool() ? {
     server: String(process.env.PROXY_SERVER || "").trim(),
     username: String(process.env.PROXY_USERNAME || process.env.PROXY_USER || "").trim(),
     password: String(process.env.PROXY_PASSWORD || process.env.PROXY_PASS || "").trim(),
@@ -2395,7 +2384,7 @@ async function __fydVintedCatalogViaPlaywright(catalogUrl) {
   const fallbackCurrency = getVintedFallbackCurrency(url);
 
   const browser = await chromium.launch({
-  proxy: __FYD_PROXY_ENABLED ? {
+  proxy: __fydProxyEnabledBool() ? {
     server: String(process.env.PROXY_SERVER || "").trim(),
     username: String(process.env.PROXY_USERNAME || process.env.PROXY_USER || "").trim(),
     password: String(process.env.PROXY_PASSWORD || process.env.PROXY_PASS || "").trim(),
@@ -2667,7 +2656,7 @@ async function scrapeVinted(url) {
 
   const browser = await chromium.launch(launchOpts);
   const context = await browser.newContext({
-  proxy: __FYD_PROXY_ENABLED ? {
+  proxy: __fydProxyEnabledBool() ? {
     server: String(process.env.PROXY_SERVER || "").trim(),
     username: String(process.env.PROXY_USERNAME || process.env.PROXY_USER || "").trim(),
     password: String(process.env.PROXY_PASSWORD || process.env.PROXY_PASS || "").trim(),
