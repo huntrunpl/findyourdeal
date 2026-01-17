@@ -75,3 +75,7 @@ _archive_backups_*/
 # local archives / backups (must never go to git)
 _archive/
 *.env*
+
+# local archives / backups (must never go to git)
+_archive/
+*.env*
