@@ -15,6 +15,7 @@ import { stripPrefixIcons, isDisableText, isSingleText, isBatchText, fixInlineBu
 import { handleLang, handleHelp, handleDefault } from "./src/bot/help-lang.js";
 import { createHandleCallback } from "./src/bot/updates/callbacks.js";
 import { createHandleUpdate } from "./src/bot/updates/handle-update.js";
+import { createPollingRunner } from "./src/bot/updates/polling.js";
 const { Pool } = pg;
 
 import { t, normalizeLang, langLabel, buildLanguageKeyboard } from "./i18n.js";
@@ -1531,18 +1532,13 @@ async function handleCallback(update) {
 }
 
 // ---------- long polling ----------
-let offset = 0;
-
-async function fetchUpdates() {
-  const url = new URL(`https://api.telegram.org/bot${TG}/getUpdates`);
-  url.searchParams.set("timeout", "30");
-  if (offset) url.searchParams.set("offset", String(offset));
-  const res = await fetch(url.href);
-  if (!res.ok) throw new Error(`getUpdates HTTP ${res.status}`);
-  const data = await res.json();
-  if (!data.ok) throw new Error(`getUpdates Telegram error: ${data.description}`);
-  return data.result;
-}
+const main = createPollingRunner({
+  TG,
+  fetch,
+  sleep,
+  handleUpdate,
+  log: console,
+});
 
 // ---------- command normalization ----------
 // (moved to api/src/bot/updates/handle-update.js)
@@ -1630,27 +1626,6 @@ async function initDbRetryLoop() {
 
 
 // ---------- main ----------
-async function main() {
-  console.log("telegram-bot.js start");
-  await initDbRetryLoop();
-
-  while (true) {
-    try {
-      const updates = await fetchUpdates();
-      for (const u of updates) {
-        offset = u.update_id + 1;
-        try {
-          await handleUpdate(u);
-        } catch (e) {
-          console.error("handleUpdate error:", e);
-        }
-      }
-    } catch (e) {
-      console.error("polling error:", e);
-      await sleep(1500);
-    }
-  }
-}
 // ---- run only when executed directly (no side-effects on import) ----
 if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch((e) => {
