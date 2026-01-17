@@ -13,6 +13,7 @@ import { hasColumn } from "./src/bot/schema-cache.js";
 import { getUserLangByUserId, maybeMigrateChatLangToUser, OLD_getLangFromUsers, setLang } from "./src/bot/lang-store.js";
 import { stripPrefixIcons, isDisableText, isSingleText, isBatchText, fixInlineButtonsI18n } from "./src/bot/inline-buttons-i18n.js";
 import { handleLang, handleHelp, handleDefault } from "./src/bot/help-lang.js";
+import { createHandleCallback } from "./src/bot/updates/callbacks.js";
 const { Pool } = pg;
 
 import { t, normalizeLang, langLabel, buildLanguageKeyboard } from "./i18n.js";
@@ -1513,52 +1514,19 @@ async function handleCheapest(msg, user) {
 }
 
 // ---------- callbacks ----------
+let __handleCallback = null;
 async function handleCallback(update) {
-  const cq = update.callback_query;
-  if (!cq) return;
-
-  const data = cq.data || "";
-  const chatId = cq.message?.chat?.id;
-  const fromId = cq.from?.id ? String(cq.from.id) : null;
-
-  if (!chatId || !fromId) {
-    await tgAnswerCb(cq.id, "Missing chat/user data.");
-    return;
+  if (!__handleCallback) {
+    __handleCallback = createHandleCallback({
+      tgAnswerCb,
+      tgSend,
+      getUserWithPlanByTelegramId,
+      ensureChatNotificationsRowDb,
+      fydResolveLang,
+      setPerLinkMode,
+    });
   }
-
-  const u = await getUserWithPlanByTelegramId(fromId);
-  if (!u?.id) {
-    await tgAnswerCb(cq.id, "Use /start.", true);
-    return;
-  }
-
-  await ensureChatNotificationsRowDb(String(chatId), u.id);
-
-  const mLang = data.match(/^lang:([a-z]{2})$/i);
-  if (mLang) {
-    const newLang = isSupportedLang(normLang(mLang[1])) ? normLang(mLang[1]) : FYD_DEFAULT_LANG;
-    await setLang(String(chatId), u, newLang);
-    await tgAnswerCb(cq.id, "OK");
-    await tgSend(String(chatId), t(newLang, "language_set", { language: escapeHtml(langLabel(newLang)) }));
-    return;
-  }
-
-  const m = data.match(/^lnmode:(\d+):(off|single|batch)$/i);
-  if (m) {
-    const linkId = Number(m[1]);
-    const mode = String(m[2]).toLowerCase();
-    const res = await setPerLinkMode(String(chatId), u.id, linkId, mode);
-    if (!res.ok) { await tgAnswerCb(cq.id, "Can't set mode.", true); return; }
-    const lang = await fydResolveLang(String(chatId), u, cq?.from?.language_code || "");
-    const pretty =
-      res.mode === "batch" ? (lang === "pl" ? "zbiorczo" : "batch") :
-      res.mode === "off" ? "OFF" :
-      (lang === "pl" ? "pojedynczo" : "single");
-    await tgAnswerCb(cq.id, lang === "pl" ? `Ustawiono: ${pretty}` : `Set: ${pretty}`);
-    return;
-  }
-
-  await tgAnswerCb(cq.id, "Unknown action.");
+  return __handleCallback(update);
 }
 
 // ---------- long polling ----------
