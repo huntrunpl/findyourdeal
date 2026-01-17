@@ -17,6 +17,7 @@ import { createHandleCallback } from "./src/bot/updates/callbacks.js";
 import { createHandleUpdate } from "./src/bot/updates/handle-update.js";
 import { createPollingRunner } from "./src/bot/updates/polling.js";
 import { handleList as handleListCmd, handleAdd as handleAddCmd, handleRemove as handleRemoveCmd } from "./src/bot/commands/links.js";
+import { createHandlePanel } from "./src/bot/commands/panel.js";
 const { Pool } = pg;
 
 import { t, normalizeLang, langLabel, buildLanguageKeyboard } from "./i18n.js";
@@ -415,29 +416,14 @@ async function handleModeBatch(msg, user) {
 }
 
 // ---------- /panel ----------
-async function handlePanel(msg, user) {
-  const chatId = String(msg.chat.id);
-  const lang = await fydResolveLang(chatId, user, msg?.from?.language_code || "");
-  const isPl = lang === "pl";
-
-  const userId = Number(user?.id || 0);
-  if (!userId) {
-    await tgSend(chatId, isPl ? "Błąd: nie mogę ustalić user_id do panelu." : "Error: cannot resolve user_id for panel.");
-    return;
-  }
-
-  const tok = randomBytes(24).toString("hex");
-  await dbQuery(
-    "INSERT INTO panel_login_tokens (token, user_id, created_at, expires_at) VALUES ($1, $2, NOW(), NOW() + INTERVAL '10 minutes')",
-    [tok, userId]
-  );
-
-  const base = process.env.PANEL_BASE_URL || "https://panel.findyourdeal.app";
-  const url = `${base}/api/auth/login?token=${tok}`;
-
-  // IMPORTANT: url in separate line (dedupe + no weird appends)
-  await tgSend(chatId, `Panel:\n${escapeHtml(url)}\n${isPl ? "Token ważny 10 minut." : "Token valid for 10 minutes."}`, { disable_web_page_preview: true, link_preview_options: { is_disabled: true } });
-}
+const handlePanel = createHandlePanel({
+  randomBytes,
+  dbQuery,
+  tgSend: (...a) => tgSend(...a),
+  escapeHtml,
+  fydResolveLang: (...a) => fydResolveLang(...a),
+  getPanelBaseUrl: () => process.env.PANEL_BASE_URL || "https://panel.findyourdeal.app",
+});
 
 // ---------- /status (full) ----------
 function formatWarsawDate(dt) {
