@@ -857,7 +857,7 @@ async function __fydBlockHeavyAssets(target) {
       } catch {}
 
       // block heavy assets (we only need HTML/JSON)
-      if (t === "image" || t === "media" || t === "font" || t === "stylesheet") return route.abort();
+      if (t === "image" || t === "media" || t === "font") return route.abort();
 
       return route.continue();
     });
@@ -1993,7 +1993,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
       await p.route(/.*/i, (route) => {
         const t = route.request().resourceType();
         try { const h = new URL(route.request().url()).hostname.toLowerCase(); if (__FYD_BLOCK_HOST_RE.test(h)) return route.abort(); } catch {}
-        if (t === "image" || t === "media" || t === "font" || t === "stylesheet") return route.abort();
+        if (t === "image" || t === "media" || t === "font") return route.abort();
         return route.continue();
       });
     } catch {}
@@ -2060,7 +2060,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
         await page.route("**/*", (route) => {
           const t = route.request().resourceType();
         try { const h = new URL(route.request().url()).hostname.toLowerCase(); if (__FYD_BLOCK_HOST_RE.test(h)) return route.abort(); } catch {}
-          if (t === "image" || t === "media" || t === "font" || t === "stylesheet") return route.abort();
+          if (t === "image" || t === "media" || t === "font") return route.abort();
           return route.continue();
         });
       } catch {}
@@ -2098,7 +2098,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
             });
             if (Array.isArray(__fydLinks) && __fydLinks.length) {
               console.log(`[olx] fast_return links=${__fydLinks.length}`);
-              // return __fydLinks;
+              return __fydLinks;
             }
           }
         } catch (e) {}
@@ -2134,7 +2134,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
       });
       if (Array.isArray(__fydLinks) && __fydLinks.length) {
         console.log(`[olx] fast_return links=${__fydLinks.length}`);
-        // return __fydLinks;
+        return __fydLinks;
       }
     }
   } catch (e) {}
@@ -2430,7 +2430,7 @@ try {
     const req = route.request();
     const t = req.resourceType();
         try { const h = new URL(req.url()).hostname.toLowerCase(); if (__FYD_BLOCK_HOST_RE.test(h)) return route.abort(); } catch {}
-    if (t === "image" || t === "media" || t === "font" || t === "stylesheet") return route.abort();
+    if (t === "image" || t === "media" || t === "font") return route.abort();
     return route.continue();
   });
 } catch {}
@@ -2438,7 +2438,7 @@ try {
   await page.route("**/*", (route) => {
     const t = route.request().resourceType();
         try { const h = new URL(route.request().url()).hostname.toLowerCase(); if (__FYD_BLOCK_HOST_RE.test(h)) return route.abort(); } catch {}
-    if (t === "image" || t === "media" || t === "font" || t === "stylesheet") return route.abort();
+    if (t === "image" || t === "media" || t === "font") return route.abort();
     return route.continue();
   });
 } catch {}
@@ -2447,7 +2447,7 @@ try {
     await page.route(/.*/i, (route) => {
       const t = route.request().resourceType();
         try { const h = new URL(route.request().url()).hostname.toLowerCase(); if (__FYD_BLOCK_HOST_RE.test(h)) return route.abort(); } catch {}
-      if (t === "image" || t === "media" || t === "font" || t === "stylesheet") return route.abort();
+      if (t === "image" || t === "media" || t === "font") return route.abort();
       // obrazki zostawiamy "jak jest" (często atrybuty są i bez pobrania, ale nie blokujemy na siłę)
       return route.continue();
     });
@@ -2700,7 +2700,7 @@ try {
   await page.route("**/*", (route) => {
     const t = route.request().resourceType();
         try { const h = new URL(route.request().url()).hostname.toLowerCase(); if (__FYD_BLOCK_HOST_RE.test(h)) return route.abort(); } catch {}
-    if (t === "image" || t === "media" || t === "font" || t === "stylesheet") return route.abort();
+    if (t === "image" || t === "media" || t === "font") return route.abort();
     return route.continue();
   });
 } catch {}
