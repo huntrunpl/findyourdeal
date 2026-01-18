@@ -2227,18 +2227,20 @@ await page.waitForTimeout(800);
       await __closeAll();
       return items;
     } catch (e) {
-      lastErr = e
-      console.log(`[olx] attempt /2 failed (proxy=${useProxy ? "on" : "off"}):`, (e && e.message) ? e.message : e);
+      lastErr = e;
+      const msg = (e && e.message) ? e.message : String(e || "");
+      console.log("[olx] attempt " + attempt + "/2 failed (proxy=" + (useProxy ? "on" : "off") + "): " + msg);
       await __closeAll();
-    } finally {
-      try { await page.close().catch(() => null); } catch {}
-      try { await context.close().catch(() => null); } catch {}
-      try { await browser.close().catch(() => null); } catch {}
+
+      // CloudFront na direct -> od razu attempt2 przez proxy (bez sleep)
+      if (msg === "OLX_CLOUDFRONT_BLOCK" && attempt === 1 && !__fydForceNoProxy && __fydProxyOpts) {
+        continue;
+      }
     }
 
     await sleep(1500 * attempt);
 
-    if (attempt < 3) continue;
+    if (attempt < 2) continue;
     throw lastErr;
   }
   // __FYD_OLX_ATTEMPTS_FALLBACK_V1__
