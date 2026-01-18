@@ -2032,7 +2032,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     const useProxy = (!__fydForceNoProxy) && (attempt === 2) && !!__fydProxyOpts; // OLX: attempt2 proxy fallback
-    console.log(`[olx] attempt ${attempt}/3 START (proxy=${useProxy ? "on" : "off"}) url=${normalizeOlxUrl(normalizeOlxUrl(url))}`);
+    console.log(`[olx] attempt /2 START (proxy=${useProxy ? "on" : "off"}) url=${normalizeOlxUrl(normalizeOlxUrl(url))}`);
 
     const __now = Date.now();
     const __until = globalThis.__olxBackoffUntil || 0;
@@ -2044,7 +2044,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
       }
       return [];
     }
-    try { console.log(`[olx] attempt ${attempt}/3 start (proxy=${useProxy ? "on" : "off"}) url=${normalizeOlxUrl(normalizeOlxUrl(url))}`); } catch {}
+    try { console.log(`[olx] attempt /2 start (proxy=${useProxy ? "on" : "off"}) url=${normalizeOlxUrl(normalizeOlxUrl(url))}`); } catch {}
 
 
     let browser = null;
@@ -2075,7 +2075,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
 
       // nawigacja
       // __FYD_OLX_START_V2__
-      console.log(`[olx] attempt ${attempt}/3 START (proxy=${useProxy ? "on" : "off"}) url=${normalizeOlxUrl(normalizeOlxUrl(url))}`);
+      console.log(`[olx] attempt /2 START (proxy=${useProxy ? "on" : "off"}) url=${normalizeOlxUrl(normalizeOlxUrl(url))}`);
             const navUrl = String(url || "").replace(/^https?:\/\/www\.olx\.pl/i, "https://www.olx.pl");
       await page.goto(__fixOlxUrl(navUrl), { waitUntil: "domcontentloaded", timeout: 60000 });
 // __FYD_OLX_READY_LOG_V2__
@@ -2228,7 +2228,7 @@ await page.waitForTimeout(800);
       return items;
     } catch (e) {
       lastErr = e
-      console.log(`[olx] attempt ${attempt}/3 failed (proxy=${useProxy ? "on" : "off"}):`, (e && e.message) ? e.message : e);
+      console.log(`[olx] attempt /2 failed (proxy=${useProxy ? "on" : "off"}):`, (e && e.message) ? e.message : e);
       await __closeAll();
     } finally {
       try { await page.close().catch(() => null); } catch {}
