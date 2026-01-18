@@ -866,7 +866,8 @@ async function __fydBlockHeavyAssets(target) {
 
 function __fydDecorateItems(link, items) {
   const label = String(link?.label || "").trim();
-  if (!label) return items;
+  if (!label) await __closeAll();
+      return items;
   const prefix = label + " · ";
   return (items || []).map((it) => {
     const title = it?.title != null ? String(it.title) : "";
@@ -1456,7 +1457,8 @@ function __itemOrderKey(item) {
 }
 
 function sortItemsNewestFirst(items) {
-  if (!Array.isArray(items) || items.length <= 1) return items;
+  if (!Array.isArray(items) || items.length <= 1) await __closeAll();
+      return items;
 
   const rows = items.map((it, idx) => {
     const raw =
@@ -1477,7 +1479,8 @@ function sortItemsNewestFirst(items) {
   });
 
   const hasAnyTs = rows.some((r) => r.ts > 0);
-  if (!hasAnyTs) return items; // respektuj kolejność z URL/scrapera
+  if (!hasAnyTs) await __closeAll();
+      return items; // respektuj kolejność z URL/scrapera
 
   rows.sort((a, b) => (b.ts - a.ts) || (a.idx - b.idx));
   return rows.map((r) => r.it);
@@ -2031,8 +2034,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
   let lastErr = null;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const useProxy = false; // FYD: OLX zawsze bez proxy (global)
-    console.log(`[olx] attempt ${attempt}/3 START (proxy=${useProxy ? "on" : "off"}) url=${normalizeOlxUrl(normalizeOlxUrl(url))}`);
+    const useProxy = (!__fydForceNoProxy) && (attempt === 2) && !!__fydProxyOpts; // OLX: attempt2 proxy fallback\n    console.log(`[olx] attempt ${attempt}/3 START (proxy=${useProxy ? "on" : "off"}) url=${normalizeOlxUrl(normalizeOlxUrl(url))}`);
 
     const __now = Date.now();
     const __until = globalThis.__olxBackoffUntil || 0;
@@ -2048,7 +2050,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
 
 
     let browser = null;
-    let context = null;
+    const __closeAll = async () => {\n      try { if (page) await page.close().catch(()=>null); } catch {}\n      try { if (context) await context.close().catch(()=>null); } catch {}\n      try { if (browser) await browser.close().catch(()=>null); } catch {}\n    };\n    let context = null;
     let page = null;
 
     try {
@@ -2218,10 +2220,12 @@ await page.waitForTimeout(800);
         };
       });
 
+      await __closeAll();
       return items;
     } catch (e) {
       lastErr = e
       console.log(`[olx] attempt ${attempt}/3 failed (proxy=${useProxy ? "on" : "off"}):`, (e && e.message) ? e.message : e);
+      await __closeAll();
     } finally {
       try { await page.close().catch(() => null); } catch {}
       try { await context.close().catch(() => null); } catch {}
@@ -2644,6 +2648,7 @@ async function scrapeVinted(url) {
     try {
       const items = await __fydVintedCatalogViaPlaywright(url);
       console.log(`[vinted-pw] fallback items=${items.length} url=${url}`);
+      await __closeAll();
       return items;
     } catch (e2) {
       console.log("[vinted-pw] fallback FAIL:", (e2 && e2.message) ? e2.message : e2);
