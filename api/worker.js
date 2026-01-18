@@ -2031,7 +2031,8 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
   let lastErr = null;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const useProxy = (!__fydForceNoProxy) && (attempt === 2) && !!__fydProxyOpts; // OLX: attempt2 proxy fallback\n    console.log(`[olx] attempt ${attempt}/3 START (proxy=${useProxy ? "on" : "off"}) url=${normalizeOlxUrl(normalizeOlxUrl(url))}`);
+    const useProxy = (!__fydForceNoProxy) && (attempt === 2) && !!__fydProxyOpts; // OLX: attempt2 proxy fallback
+    console.log(`[olx] attempt ${attempt}/3 START (proxy=${useProxy ? "on" : "off"}) url=${normalizeOlxUrl(normalizeOlxUrl(url))}`);
 
     const __now = Date.now();
     const __until = globalThis.__olxBackoffUntil || 0;
