@@ -866,7 +866,6 @@ async function __fydBlockHeavyAssets(target) {
 
 function __fydDecorateItems(link, items) {
   const label = String(link?.label || "").trim();
-  if (!label) await __closeAll();
       return items;
   const prefix = label + " · ";
   return (items || []).map((it) => {
@@ -1457,7 +1456,6 @@ function __itemOrderKey(item) {
 }
 
 function sortItemsNewestFirst(items) {
-  if (!Array.isArray(items) || items.length <= 1) await __closeAll();
       return items;
 
   const rows = items.map((it, idx) => {
@@ -1479,7 +1477,6 @@ function sortItemsNewestFirst(items) {
   });
 
   const hasAnyTs = rows.some((r) => r.ts > 0);
-  if (!hasAnyTs) await __closeAll();
       return items; // respektuj kolejność z URL/scrapera
 
   rows.sort((a, b) => (b.ts - a.ts) || (a.idx - b.idx));
@@ -2050,7 +2047,13 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
 
 
     let browser = null;
-    const __closeAll = async () => {\n      try { if (page) await page.close().catch(()=>null); } catch {}\n      try { if (context) await context.close().catch(()=>null); } catch {}\n      try { if (browser) await browser.close().catch(()=>null); } catch {}\n    };\n    let context = null;
+    const __closeAll = async () => {
+      try { if (page) await page.close().catch(() => null); } catch {}
+      try { if (context) await context.close().catch(() => null); } catch {}
+      try { if (browser) await browser.close().catch(() => null); } catch {}
+    };
+
+    let context = null;
     let page = null;
 
     try {
@@ -2648,7 +2651,6 @@ async function scrapeVinted(url) {
     try {
       const items = await __fydVintedCatalogViaPlaywright(url);
       console.log(`[vinted-pw] fallback items=${items.length} url=${url}`);
-      await __closeAll();
       return items;
     } catch (e2) {
       console.log("[vinted-pw] fallback FAIL:", (e2 && e2.message) ? e2.message : e2);
