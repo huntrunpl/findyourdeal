@@ -3103,7 +3103,8 @@ async function __fydGetAvailableMemMb() {
 
 async function __fydGetChromiumProcCount() {
   try {
-    const out = String(cp.execSync("pgrep -af \"chrome-headless-shell\" || true", { encoding: "utf8" }));
+    const cp = await import("node:child_process");
+    const out = String(cp.execSync("pgrep -af \\\"chrome-headless-shell\\\" || true", { encoding: "utf8" }));
     const lines = out.split("\n").map(l => l.trim()).filter(Boolean);
     const roots = lines.filter(l => !l.includes(" --type="));
     return roots.length;
@@ -3112,9 +3113,24 @@ async function __fydGetChromiumProcCount() {
   }
 }
 
-function __fydKillRootChromium() {
+async function __fydKillRootChromium() {
   try {
-    const out = String(cp.execSync("pgrep -af \"chrome-headless-shell\" || true", { encoding: "utf8" }));
+    const cp = await import("node:child_process");
+    const out = String(cp.execSync("pgrep -af \\\"chrome-headless-shell\\\" || true", { encoding: "utf8" }));
+    const pids = out
+      .split("\n")
+      .map(l => l.trim())
+      .filter(Boolean)
+      .filter(l => !l.includes(" --type="))
+      .map(l => Number(String(l).split(/\s+/)[0]))
+      .filter(n => Number.isFinite(n) && n > 1);
+
+    for (const pid of pids) {
+      try { process.kill(pid, "SIGKILL"); } catch {}
+    }
+  } catch {}
+}
+));
     const pids = out
       .split("\n")
       .map(l => l.trim())
