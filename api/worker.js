@@ -3120,7 +3120,7 @@ async function __fydChromiumGuard(tag) {
     const p = await __fydGetChromiumProcCount();
     const avail = await __fydGetAvailableMemMb();
 
-    const tooMany = (p != null && p >= maxP);
+    const tooMany = (p != null && p > maxP);
     const tooLowMem = (avail != null && avail <= minMb);
 
     if (!tooMany && !tooLowMem) return;
