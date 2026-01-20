@@ -1,3 +1,14 @@
+import pg from "pg";
+import { hasColumn } from "./schema-cache.js";
+import { normLang } from "./utils.js";
+import { FYD_DEFAULT_LANG, isSupportedLang } from "./i18n.js";
+
+const { Pool } = pg;
+const DATABASE_URL = process.env.DATABASE_URL || "";
+const __pool = globalThis.__FYD_LANG_POOL_SINGLE || new Pool({ connectionString: DATABASE_URL });
+globalThis.__FYD_LANG_POOL_SINGLE = __pool;
+async function dbQuery(sql, params = []) { return __pool.query(sql, params); }
+
 // extracted from api/telegram-bot.js (NO behavior change)
 
 // ---------- language read/write (panel <-> tg) ----------
@@ -118,20 +129,7 @@ async function setLang(chatId, user, langCode) {
         await dbQuery(`UPDATE public.users SET language=$2, updated_at=NOW() WHERE id=$1`, [uid, lang]);
       }
     } catch {}
-  }
-
-  // keep per-chat language in sync (if column exists)
-  try {
-    await ensureChatNotificationsRowDb(String(chatId), uid);
-    if (await hasColumn("chat_notifications", "language")) {
-      await dbQuery(
-        `UPDATE public.chat_notifications SET language=$3, updated_at=NOW()
-         WHERE chat_id=$1 AND user_id=$2`,
-        [String(chatId), uid, lang]
-      );
-    }
-  } catch {}
-
+  }  
   return lang;
 }
 

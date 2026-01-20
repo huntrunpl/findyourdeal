@@ -117,7 +117,7 @@ export function createHandleStatus(deps) {
     let historyLimit = Number(ent?.history_total_limit ?? ent?.history_limit_total ?? ent?.history_limit ?? 0);
     if (!Number.isFinite(historyLimit) || historyLimit <= 0) historyLimit = baseHistory + addons * 100;
 
-    let dailyLimit = Number(ent?.daily_notifications_limit ?? ent?.daily_limit ?? ent?.daily_notifications ?? 0);
+    let dailyLimit = Number(ent?.daily_notifications_limit ?? ent?.daily_notifications ?? 0);
     if (!Number.isFinite(dailyLimit) || dailyLimit <= 0) dailyLimit = baseDaily + addons * 100;
 
     // counts

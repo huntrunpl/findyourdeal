@@ -1895,7 +1895,7 @@ async function getDailyLimitForUserId(db, userId) {
   try {
     const r = await db.query(
       `SELECT
-         COALESCE(daily_notifications_limit, daily_limit, daily_notifications, 0) AS daily,
+         COALESCE(daily_notifications_limit, daily_notifications, 0) AS daily,
          COALESCE(plan_code, plan, code, '') AS plan_code
        FROM user_entitlements_v
        WHERE user_id=$1
@@ -1973,6 +1973,8 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
     const launchOpts = { args: baseArgs.slice() };
     // FYD: proxy only for Vinted (OLX without proxy)
     if (false && useProxy && __fydProxyOpts) launchOpts.proxy = __fydProxyOpts;
+
+    await __fydChromiumGuard("pw");
 
     const browser = await chromium.launch(launchOpts);
     const context = await browser.newContext({
@@ -2393,6 +2395,8 @@ async function __fydVintedCatalogViaPlaywright(catalogUrl) {
 
   const fallbackCurrency = getVintedFallbackCurrency(url);
 
+  await __fydChromiumGuard("pw");
+
   const browser = await chromium.launch({
   proxy: __fydProxyEnabledBool() ? {
     server: String(process.env.PROXY_SERVER || "").trim(),
@@ -2663,6 +2667,8 @@ async function scrapeVinted(url) {
   // 2) DOM fallback (klasyczny)
   const launchOpts = { args: ["--no-sandbox", "--disable-dev-shm-usage"] };
   if (PROXY) launchOpts.proxy = PROXY;
+
+  await __fydChromiumGuard("pw");
 
   const browser = await chromium.launch(launchOpts);
   const context = await browser.newContext({
@@ -3077,3 +3083,50 @@ const __FYD_WORKER_IS_ENTRY = (() => {
 if (__FYD_WORKER_IS_ENTRY) {
   main().catch((e) => { console.error("FATAL in worker main:", e); });
 }
+
+// ---- FYD: Chromium guard (prevents runaway Playwright) ----
+const FYD_MAX_CHROMIUM_PROCS = Number(process.env.MAX_CHROMIUM_PROCS || 4);
+const FYD_CHROMIUM_GUARD_SLEEP_MS = Number(process.env.CHROMIUM_GUARD_SLEEP_MS || 30000);
+const FYD_MIN_AVAILABLE_MB = Number(process.env.MIN_AVAILABLE_MB || 512);
+
+async function __fydGetAvailableMemMb() {
+  try {
+    const fs = await import("node:fs/promises");
+    const txt = await fs.readFile("/proc/meminfo", "utf8");
+    const m = txt.match(/^MemAvailable:\s+(\d+)\s+kB/m);
+    if (m) return Math.floor(Number(m[1]) / 1024);
+  } catch {}
+  return null;
+}
+
+async function __fydGetChromiumProcCount() {
+  try {
+    const cp = await import("node:child_process");
+    const out = cp.execSync("ps -eo cmd | grep -E 'ms-playwright/chromium_head|chrome-headless' | wc -l", {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const n = Number(String(out || "").trim());
+    return Number.isFinite(n) ? n : null;
+  } catch {}
+  return null;
+}
+
+async function __fydChromiumGuard(tag) {
+  const maxP = Number.isFinite(FYD_MAX_CHROMIUM_PROCS) && FYD_MAX_CHROMIUM_PROCS > 0 ? FYD_MAX_CHROMIUM_PROCS : 4;
+  const minMb = Number.isFinite(FYD_MIN_AVAILABLE_MB) && FYD_MIN_AVAILABLE_MB > 0 ? FYD_MIN_AVAILABLE_MB : 512;
+  const sleepMs = Number.isFinite(FYD_CHROMIUM_GUARD_SLEEP_MS) && FYD_CHROMIUM_GUARD_SLEEP_MS > 0 ? FYD_CHROMIUM_GUARD_SLEEP_MS : 30000;
+
+  while (true) {
+    const p = await __fydGetChromiumProcCount();
+    const avail = await __fydGetAvailableMemMb();
+
+    const tooMany = (p != null && p >= maxP);
+    const tooLowMem = (avail != null && avail <= minMb);
+
+    if (!tooMany && !tooLowMem) return;
+
+    console.log(`[guard] ${tag || "chromium"} wait: procs=${p} max=${maxP} availMB=${avail} minMB=${minMb}`);
+    await sleep(sleepMs);
+  }
+}
+// ---- FYD: Chromium guard END ----

@@ -1,6 +1,7 @@
 import "./env.js";
 
 import fetch from "node-fetch";
+const __fetch = (typeof fetch === "function" ? fetch : (fetch && typeof fetch.default === "function" ? fetch.default : globalThis.fetch));
 import { randomBytes } from "node:crypto";
 import pg from "pg";
 import { sleep, escapeHtml, normLang } from "./src/bot/utils.js";
@@ -11,8 +12,12 @@ import { dedupePanelLoginUrlText, appendUrlFromKeyboard } from "./src/bot/text-n
 import { FYD_DEFAULT_LANG, FYD_SUPPORTED_LANGS, isSupportedLang } from "./src/bot/i18n.js";
 import { hasColumn } from "./src/bot/schema-cache.js";
 import { getUserLangByUserId, maybeMigrateChatLangToUser, OLD_getLangFromUsers, setLang } from "./src/bot/lang-store.js";
+
+// FYD: canonical lang resolver alias (used across handlers)
+const fydResolveLang = OLD_getLangFromUsers;
+
 import { stripPrefixIcons, isDisableText, isSingleText, isBatchText, fixInlineButtonsI18n } from "./src/bot/inline-buttons-i18n.js";
-import { handleLang, handleHelp, handleDefault } from "./src/bot/help-lang.js";
+import { createHelpLangHandlers } from "./src/bot/help-lang.js";
 import { createHandleCallback } from "./src/bot/updates/callbacks.js";
 import { createHandleUpdate } from "./src/bot/updates/handle-update.js";
 import { createPollingRunner } from "./src/bot/updates/polling.js";
@@ -58,10 +63,24 @@ import {
  */
 
 const TG = process.env.TELEGRAM_BOT_TOKEN || "";
+
 const DATABASE_URL = process.env.DATABASE_URL || "";
 
 
 const __botPool = new Pool({ connectionString: DATABASE_URL });
+
+// ---- TG client (extracted) ----
+const { tgSend, tgAnswerCb } = createTg({
+  TG,
+  fetchFn: __fetch,
+  sleep,
+  log: console,
+  dbQuery: (...args) => __botPool.query(...args),
+  fixInlineButtonsI18n,
+  dedupePanelLoginUrlText,
+  appendUrlFromKeyboard,
+});
+
 
 async function __fydResetAllLinksBaseline(userId) {
   const uid = Number(userId);
@@ -146,6 +165,20 @@ const { handlePlans, handleBuyPlan, handleAddon10 } = createPlanHandlers({
 async function handleList(msg, user) {
   return handleListCmd({ dbQuery, pool, tgSend, escapeHtml, fydResolveLang }, msg, user);
 }
+
+// ---------- history: /latest + /cheapest ----------
+const { handleNewestStrict, handleCheapest } = createHistoryHandlers({
+  tgSend,
+  fydResolveLang,
+  escapeHtml,
+  dbQuery,
+  hasColumn,
+  stripPrefixIcons,
+  dedupePanelLoginUrlText,
+  appendUrlFromKeyboard,
+  normLang,
+  t,
+});
 
 // ---------- /add ----------
 async function handleAdd(msg, user, argText) {
@@ -273,7 +306,7 @@ async function handleCallback(update) {
 // ---------- long polling ----------
 const main = createPollingRunner({
   TG,
-  fetch,
+  fetch: __fetch,
   sleep,
   handleUpdate,
   log: console,

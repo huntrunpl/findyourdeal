@@ -59,6 +59,9 @@ services:
       - .env
     environment:
       - API_BASE=http://api:3000
+      - MAX_CHROMIUM_PROCS=20
+      - MIN_AVAILABLE_MB=1024
+      - CHROMIUM_GUARD_SLEEP_MS=60000
     depends_on:
       - db
       - api
