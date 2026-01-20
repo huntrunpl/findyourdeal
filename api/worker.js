@@ -3155,8 +3155,7 @@ async function __fydChromiumGuard(tag) {
       if (!last || (now - last) > cd) {
         globalThis.__fydChromiumKillTs = now;
         try {
-          const cp2 = await import("node:child_process");
-          __fydKillRootChromium();
+          await __fydKillRootChromium();
         } catch {}
         console.log("[guard] " + (tag || "chromium") + " KILL runaway chromium procs=" + p + " max=" + maxP);
       }
