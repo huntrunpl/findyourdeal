@@ -54,11 +54,13 @@ services:
       context: .
       dockerfile: Dockerfile.worker
     restart: unless-stopped
+    init: true
     working_dir: /app/api
     env_file:
       - .env
     environment:
       - API_BASE=http://api:3000
+      - LOOP_DELAY_MS=300000
       - MAX_CHROMIUM_PROCS=20
       - MIN_AVAILABLE_MB=1024
       - CHROMIUM_GUARD_SLEEP_MS=60000
@@ -73,6 +75,7 @@ services:
       context: .
       dockerfile: Dockerfile.worker
     restart: unless-stopped
+    init: true
     working_dir: /app/api
     command: ["node", "telegram-bot.js"]
     env_file:
