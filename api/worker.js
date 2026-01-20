@@ -3088,6 +3088,8 @@ if (__FYD_WORKER_IS_ENTRY) {
 const FYD_MAX_CHROMIUM_PROCS = Number(process.env.MAX_CHROMIUM_PROCS || 4);
 const FYD_CHROMIUM_GUARD_SLEEP_MS = Number(process.env.CHROMIUM_GUARD_SLEEP_MS || 30000);
 const FYD_MIN_AVAILABLE_MB = Number(process.env.MIN_AVAILABLE_MB || 512);
+const FYD_CHROMIUM_GUARD_KILL = String(process.env.CHROMIUM_GUARD_KILL || "").trim();
+const FYD_CHROMIUM_GUARD_KILL_COOLDOWN_MS = Number(process.env.CHROMIUM_GUARD_KILL_COOLDOWN_MS || 120000);
 
 async function __fydGetAvailableMemMb() {
   try {
@@ -3125,7 +3127,24 @@ async function __fydChromiumGuard(tag) {
 
     if (!tooMany && !tooLowMem) return;
 
-    console.log(`[guard] ${tag || "chromium"} wait: procs=${p} max=${maxP} availMB=${avail} minMB=${minMb}`);
+    const killOn = (FYD_CHROMIUM_GUARD_KILL === "1" || String(FYD_CHROMIUM_GUARD_KILL || "").toLowerCase() === "true");
+    if (killOn) {
+      const now = Date.now();
+      const cd = (Number.isFinite(FYD_CHROMIUM_GUARD_KILL_COOLDOWN_MS) && FYD_CHROMIUM_GUARD_KILL_COOLDOWN_MS > 0)
+        ? FYD_CHROMIUM_GUARD_KILL_COOLDOWN_MS
+        : 120000;
+      const last = Number(globalThis.__fydChromiumKillTs || 0);
+      if (!last || (now - last) > cd) {
+        globalThis.__fydChromiumKillTs = now;
+        try {
+          const cp2 = await import("node:child_process");
+          cp2.execSync('pkill -9 -f "ms-playwright/chromium_head|chrome-headless-shell|chrome-headless" || true', { stdio: ["ignore","ignore","ignore"] });
+        } catch {}
+        console.log("[guard] " + (tag || "chromium") + " KILL runaway chromium procs=" + p + " max=" + maxP);
+      }
+    }
+
+    console.log("[guard] " + (tag || "chromium") + " wait: procs=" + p + " max=" + maxP + " availMB=" + avail + " minMB=" + minMb);
     await sleep(sleepMs);
   }
 }
