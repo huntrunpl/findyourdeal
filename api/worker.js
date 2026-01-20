@@ -3104,7 +3104,7 @@ async function __fydGetAvailableMemMb() {
 async function __fydGetChromiumProcCount() {
   try {
     const cp = await import("node:child_process");
-    const out = String(cp.execSync("pgrep -af "chrome-headless-shell" || true", { encoding: "utf8" }));
+    const out = String(cp.execSync('pgrep -af "chrome-headless-shell" || true', { encoding: "utf8" }));
     const lines = out.split("\n").map(l => l.trim()).filter(Boolean);
     const roots = lines.filter(l => !l.includes(" --type="));
     return roots.length;
@@ -3116,7 +3116,7 @@ async function __fydGetChromiumProcCount() {
 async function __fydKillRootChromium() {
   try {
     const cp = await import("node:child_process");
-    const out = String(cp.execSync("pgrep -af "chrome-headless-shell" || true", { encoding: "utf8" }));
+    const out = String(cp.execSync('pgrep -af "chrome-headless-shell" || true', { encoding: "utf8" }));
     const pids = out
       .split("\n")
       .map(l => l.trim())
