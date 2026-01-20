@@ -3130,20 +3130,6 @@ async function __fydKillRootChromium() {
     }
   } catch {}
 }
-));
-    const pids = out
-      .split("\n")
-      .map(l => l.trim())
-      .filter(Boolean)
-      .filter(l => !l.includes(" --type="))
-      .map(l => Number(String(l).split(/\s+/)[0]))
-      .filter(n => Number.isFinite(n) && n > 1);
-
-    for (const pid of pids) {
-      try { process.kill(pid, "SIGKILL"); } catch {}
-    }
-  } catch {}
-}
 
 async function __fydChromiumGuard(tag) {
   const maxP = Number.isFinite(FYD_MAX_CHROMIUM_PROCS) && FYD_MAX_CHROMIUM_PROCS > 0 ? FYD_MAX_CHROMIUM_PROCS : 4;
