@@ -3104,7 +3104,7 @@ async function __fydGetAvailableMemMb() {
 async function __fydGetChromiumProcCount() {
   try {
     const cp = await import("node:child_process");
-    const out = cp.execSync("ps -eo cmd | grep -E 'ms-playwright/chromium_head|chrome-headless' | wc -l", {
+    const out = cp.execSync("pgrep -fc 'ms-playwright/chromium_head' || true", {
       stdio: ["ignore", "pipe", "ignore"],
     });
     const n = Number(String(out || "").trim());
@@ -3138,7 +3138,7 @@ async function __fydChromiumGuard(tag) {
         globalThis.__fydChromiumKillTs = now;
         try {
           const cp2 = await import("node:child_process");
-          cp2.execSync('pkill -9 -f "ms-playwright/chromium_head|chrome-headless-shell|chrome-headless" || true', { stdio: ["ignore","ignore","ignore"] });
+          cp2.execSync('pkill -9 -f "ms-playwright/chromium_head-shell|chrome-headless" || true', { stdio: ["ignore","ignore","ignore"] });
         } catch {}
         console.log("[guard] " + (tag || "chromium") + " KILL runaway chromium procs=" + p + " max=" + maxP);
       }
