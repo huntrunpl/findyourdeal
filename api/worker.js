@@ -1977,6 +1977,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
     await __fydChromiumGuard("pw");
 
     const browser = await chromium.launch(launchOpts);
+    __fydBrowserPid = (browser && typeof browser.process === "function" && browser.process() && browser.process().pid) ? browser.process().pid : null;
     const context = await browser.newContext({
   proxy: (useProxy && __fydProxyOpts) ? __fydProxyOpts : undefined,
 
@@ -2031,6 +2032,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
   }
 
   let lastErr = null;
+  let __fydBrowserPid = null;
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     const useProxy = (!__fydForceNoProxy) && (attempt === 2) && !!__fydProxyOpts; // OLX: attempt2 proxy fallback
@@ -2051,9 +2053,31 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
 
     let browser = null;
     const __closeAll = async () => {
-      try { if (page) await page.close().catch(() => null); } catch {}
-      try { if (context) await context.close().catch(() => null); } catch {}
-      try { if (browser) await browser.close().catch(() => null); } catch {}
+      const __fydCloseWithTimeout = async (fn, ms) => {
+        try {
+          if (!fn) return;
+          await Promise.race([
+            fn(),
+            new Promise((resolve) => setTimeout(resolve, ms)),
+          ]).catch(() => null);
+        } catch {}
+      };
+
+      try { if (page) await __fydCloseWithTimeout(() => page.close(), 3000); } catch {}
+      try { if (context) await __fydCloseWithTimeout(() => context.close(), 3000); } catch {}
+      try { if (browser) await __fydCloseWithTimeout(() => browser.close(), 5000); } catch {}
+
+      // HARD KILL: jeśli Playwright/chromium się zawiesił i close nie ubił procesu
+      try {
+        if (__fydBrowserPid) {
+          try { process.kill(__fydBrowserPid, 0); } catch { __fydBrowserPid = null; }
+          if (__fydBrowserPid) {
+            try { console.log("[guard] HARD_KILL pid=" + __fydBrowserPid); } catch {}
+            try { require("child_process").execSync("pkill -P " + __fydBrowserPid + " || true", { stdio: "ignore", timeout: 2000 }); } catch {}
+            try { process.kill(__fydBrowserPid, "SIGKILL"); } catch {}
+          }
+        }
+      } catch {}
     };
 
     let context = null;
@@ -2061,6 +2085,7 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
 
     try {
       ({ browser, context } = await makeContext(useProxy));
+      __fydBrowserPid = (browser && typeof browser.process === "function" && browser.process() && browser.process().pid) ? browser.process().pid : null;
       page = await context.newPage();
 
       // blokuj ciężkie zasoby
@@ -2106,8 +2131,8 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
             });
             if (Array.isArray(__fydLinks) && __fydLinks.length) {
               console.log(`[olx] fast_return links=${__fydLinks.length}`);
-              return __fydLinks;
-            }
+              await __closeAll();
+              return __fydLinks;            }
           }
         } catch (e) {}
 
@@ -2142,8 +2167,8 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
       });
       if (Array.isArray(__fydLinks) && __fydLinks.length) {
         console.log(`[olx] fast_return links=${__fydLinks.length}`);
-        return __fydLinks;
-      }
+        await __closeAll();
+              return __fydLinks;      }
     }
   } catch (e) {}
 
@@ -3107,8 +3132,8 @@ async function __fydGetChromiumProcCount() {
     const cp = await import("node:child_process");
     const out = String(cp.execSync('pgrep -af "chrome-headless-shell" || true', { encoding: "utf8" }));
     const lines = out.split("\n").map(l => l.trim()).filter(Boolean);
-    const roots = lines.filter(l => !l.includes(" --type="));
-    return roots.length;
+    // COUNT ALL chromium procs (roots + children)
+    return lines.length;
   } catch {
     return 0;
   }
