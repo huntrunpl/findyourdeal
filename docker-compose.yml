@@ -61,7 +61,7 @@ services:
     environment:
       - API_BASE=http://api:3000
       - LOOP_DELAY_MS=300000
-      - MAX_CHROMIUM_PROCS=20
+      - MAX_CHROMIUM_PROCS=35
       - MIN_AVAILABLE_MB=1024
       - CHROMIUM_GUARD_SLEEP_MS=60000
       - CHROMIUM_GUARD_KILL=1
@@ -69,7 +69,6 @@ services:
     depends_on:
       - db
       - api
-
   tg-bot:
     build:
       context: .
