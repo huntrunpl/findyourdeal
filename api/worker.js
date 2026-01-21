@@ -1972,15 +1972,13 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
   const makeContext = async (useProxy) => {
     const launchOpts = { args: baseArgs.slice() };
     // FYD: proxy only for Vinted (OLX without proxy)
-    if (false && useProxy && __fydProxyOpts) launchOpts.proxy = __fydProxyOpts;
+    if (useProxy && __fydProxyOpts) launchOpts.proxy = __fydProxyOpts;
 
     await __fydChromiumGuard("pw");
 
     const browser = await chromium.launch(launchOpts);
     __fydBrowserPid = (browser && typeof browser.process === "function" && browser.process() && browser.process().pid) ? browser.process().pid : null;
     const context = await browser.newContext({
-  proxy: (useProxy && __fydProxyOpts) ? __fydProxyOpts : undefined,
-
       locale: "pl-PL",
       timezoneId: "Europe/Warsaw",
       userAgent:
