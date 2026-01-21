@@ -2794,6 +2794,7 @@ try {
 
     return __fydFixVintedItems(mappedItems);
   } finally {
+    try { if (page) await page.close().catch(() => null); } catch {}
     await context.close().catch(() => null);
     await browser.close().catch(() => null);
   }
