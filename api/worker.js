@@ -2132,7 +2132,8 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
             if (Array.isArray(__fydLinks) && __fydLinks.length) {
               console.log(`[olx] fast_return links=${__fydLinks.length}`);
               await __closeAll();
-              return __fydLinks;            }
+              return __fydLinks;
+            }
           }
         } catch (e) {}
 
@@ -2168,7 +2169,8 @@ async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
       if (Array.isArray(__fydLinks) && __fydLinks.length) {
         console.log(`[olx] fast_return links=${__fydLinks.length}`);
         await __closeAll();
-              return __fydLinks;      }
+              return __fydLinks;
+            }
     }
   } catch (e) {}
 
