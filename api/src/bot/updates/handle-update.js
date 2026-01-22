@@ -41,6 +41,7 @@ export function createHandleUpdate(ctx) {
     handlePlans,
     handleBuyPlan,
     handleAddon10,
+    handleTimezone,
 
     handleCena,
     handleRozmiar,
@@ -96,6 +97,7 @@ export function createHandleUpdate(ctx) {
       ["/lang", "/lang"],
       ["/starter", "/starter"], ["/growth", "/growth"], ["/platinum", "/platinum"],
       ["/addon10", "/addon10"],
+      ["/timezone", "/timezone"], ["/strefa", "/timezone"], ["/tz", "/timezone"],
       ["/cena", "/cena"], ["/rozmiar", "/rozmiar"], ["/marka", "/marka"],
       ["/filtry", "/filtry"], ["/resetfiltry", "/resetfiltry"],
       ["/usun_uzytkownika", "/usun_uzytkownika"],
@@ -215,6 +217,8 @@ export function createHandleUpdate(ctx) {
     if (command === "/growth") return handleBuyPlan(msg, user, "growth");
     if (command === "/platinum") return handleBuyPlan(msg, user, "platinum");
     if (command === "/addon10") return handleAddon10(msg, user);
+
+    if (command === "/timezone") return handleTimezone(msg, user, argText);
 
     if (command === "/cena") return handleCena(msg, user);
     if (command === "/rozmiar") return handleRozmiar(msg, user);

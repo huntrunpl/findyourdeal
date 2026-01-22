@@ -1605,6 +1605,33 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
       }).format(new Date())
     );
 
+  const __todayForTz = (tz) => {
+    try {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: tz || "Europe/Warsaw",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+    } catch {
+      return __warsawDay();
+    }
+  };
+  const __hourForTz = (tz) => {
+    try {
+      const hh = new Intl.DateTimeFormat("en-GB", {
+        timeZone: tz || "Europe/Warsaw",
+        hour: "2-digit",
+        hour12: false,
+      }).format(new Date());
+      const n = Number(hh);
+      return Number.isFinite(n) ? n : __warsawHour();
+    } catch {
+      return __warsawHour();
+    }
+  };
+
+
   const todayStr = __warsawDay();
   const nowHour = __warsawHour();
 
@@ -1619,6 +1646,7 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
         cn.enabled,
         cn.mode AS chat_mode,
         COALESCE(NULLIF(cn.language,''), NULLIF(u.lang,''), NULLIF(u.language,''), 'en') AS lang,
+        COALESCE(NULLIF(u.timezone,''), 'Europe/Warsaw') AS tz,
         cn.daily_count,
         cn.daily_count_date,
         LOWER(COALESCE(lnm.mode, cn.mode)) AS effective_mode,
@@ -1701,10 +1729,8 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
                 itemDayStr = null;
               }
 
-              if (itemDayStr && itemDayStr < todayStr) {
-                // starsze niż dzisiejszy dzień – wywalamy
-                return false;
-              }
+              // UWAGA: nie filtrujemy globalnie po 'todayStr', bo użytkownicy mogą mieć różne strefy.
+              // Filtr dzienny jest robiony per-user (per row) poniżej.
 
               // UWAGA: notify_from (chat_notify_from / link_notify_from) NA RAZIE WYŁĄCZONY
               // jeśli będziemy chcieli przywrócić, dokładamy tu warunek ts >= __startAt
@@ -1727,6 +1753,48 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
     for (const row of chatRows) {
       const chatId = row.chat_id;
       const userId = row.user_id;
+      const userTz = String(row.tz || "Europe/Warsaw");
+      const rowHour = (typeof __hourForTz === "function" ? __hourForTz(userTz) : nowHour);
+      const todayUserStr = (typeof __todayForTz === "function" ? __todayForTz(userTz) : todayStr);
+      // per-user day filter (do not mutate global items)
+      let itemsForRow = Array.isArray(items) ? items : [];
+      let skippedExtraForRow = Number(skippedExtra || 0);
+      try {
+        const beforeN = itemsForRow.length;
+        itemsForRow = itemsForRow.filter((it) => {
+          const raw =
+            it?.first_seen_at || it?.firstSeenAt ||
+            it?.listed_at || it?.listedAt ||
+            it?.created_at || it?.createdAt ||
+            it?.published_at || it?.publishedAt ||
+            null;
+          if (!raw) return true;
+          let ts = 0;
+          if (typeof raw === "number") {
+            ts = raw > 10_000_000_000 ? raw : raw * 1000;
+          } else if (typeof raw === "string" && raw.trim()) {
+            const t = Date.parse(raw);
+            ts = Number.isFinite(t) ? t : 0;
+          }
+          if (!ts) return true;
+          let itemDayStr = null;
+          try {
+            itemDayStr = new Intl.DateTimeFormat("en-CA", {
+              timeZone: userTz || "Europe/Warsaw",
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit",
+            }).format(new Date(ts));
+          } catch {
+            itemDayStr = null;
+          }
+          if (itemDayStr && itemDayStr < todayUserStr) return false;
+          return true;
+        });
+        const removed = beforeN - itemsForRow.length;
+        if (removed > 0) skippedExtraForRow += removed;
+      } catch {}
+
       const rowLang = __fydLangBaseBtn(row.lang || "en");
 
       // 2) cisza nocna
@@ -1734,8 +1802,8 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
       const quietFrom = typeof row.quiet_from === "number" ? row.quiet_from : 22;
       const quietTo = typeof row.quiet_to === "number" ? row.quiet_to : 7;
 
-      if (quietEnabled && isHourInQuietRange(nowHour, quietFrom, quietTo)) {
-        logDebug(`notify_debug_quiet chat=${chatId} user=${userId} from=${quietFrom} to=${quietTo} now=${nowHour}`);
+      if (quietEnabled && isHourInQuietRange(rowHour, quietFrom, quietTo)) {
+        logDebug(`notify_debug_quiet chat=${chatId} user=${userId} tz=${userTz} from=${quietFrom} to=${quietTo} now=${rowHour}`);
         continue;
       }
 
@@ -1763,7 +1831,7 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
           dailyDateStr = ddate ? String(ddate).slice(0, 10) : null;
         }
         // porównujemy datę z Warsaw (todayStr) z datą w chat_notifications
-        if (dailyDateStr === todayStr) {
+        if (dailyDateStr === todayUserStr) {
           if (Number.isFinite(dc) && dc >= 0) {
             dailyCount = dc;
           }
@@ -1774,12 +1842,12 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
         } catch {}
       }
 
-      logDebug(`notify_debug_daily chat=${chatId} user=${userId} count=${dailyCount} date=${dailyDateStr} max=${maxDaily}`);
+      logDebug(`notify_debug_daily chat=${chatId} user=${userId} tz=${userTz} count=${dailyCount} date=${dailyDateStr} max=${maxDaily}`);
 
       if (dailyCount >= maxDaily) {
         logDebug(`notify_debug_limit chat=${chatId} user=${userId} count=${dailyCount} max=${maxDaily}`);
         console.log(
-          `[notify_debug_limit] link_id=${link.id} chat_id=${chatId} user_id=${userId} dailyCount=${dailyCount} maxDaily=${maxDaily} today=${todayStr}`
+          `[notify_debug_limit] link_id=${link.id} chat_id=${chatId} user_id=${userId} dailyCount=${dailyCount} maxDaily=${maxDaily} today=${todayUserStr}`
         );
         continue;
       }
@@ -1792,7 +1860,7 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
         const remaining = Math.max(0, maxDaily - dailyCount);
         if (remaining <= 0) continue;
 
-        const slice = items.slice(0, remaining);
+        const slice = itemsForRow.slice(0, remaining);
         for (const item of slice) {
           await tgSendItem(chatId, link, item, rowLang);
           await __fydBumpChatDailyCount(notifyPool, chatId, userId, 1);
@@ -1803,9 +1871,9 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
         const key = makeBatchKey(chatId, userId, link.id);
         const existing = batchBuffers.get(key) || { items: [], skippedExtra: 0 };
 
-        existing.items.push(...items);
-        if (typeof skippedExtra === "number" && skippedExtra > 0) {
-          existing.skippedExtra += skippedExtra;
+        existing.items.push(...itemsForRow);
+        if (typeof skippedExtraForRow === "number" && skippedExtraForRow > 0) {
+          existing.skippedExtra += skippedExtraForRow;
         }
 
         if (existing.items.length < minBatchItems && existing.skippedExtra === 0) {
@@ -1895,8 +1963,8 @@ async function getDailyLimitForUserId(db, userId) {
   try {
     const r = await db.query(
       `SELECT
-         COALESCE(daily_notifications_limit, daily_notifications, 0) AS daily,
-         COALESCE(plan_code, plan, code, '') AS plan_code
+         COALESCE(daily_notifications_limit, 0) AS daily,
+         COALESCE(plan_code, '') AS plan_code
        FROM user_entitlements_v
        WHERE user_id=$1
        LIMIT 1`,
@@ -2423,11 +2491,6 @@ async function __fydVintedCatalogViaPlaywright(catalogUrl) {
   await __fydChromiumGuard("pw");
 
   const browser = await chromium.launch({
-  proxy: __fydProxyEnabledBool() ? {
-    server: String(process.env.PROXY_SERVER || "").trim(),
-    username: String(process.env.PROXY_USERNAME || process.env.PROXY_USER || "").trim(),
-    password: String(process.env.PROXY_PASSWORD || process.env.PROXY_PASS || "").trim(),
-  } : undefined,
  headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
   const context = await browser.newContext({
     locale: "pl-PL",
@@ -2691,18 +2754,12 @@ async function scrapeVinted(url) {
 
   // 2) DOM fallback (klasyczny)
   const launchOpts = { args: ["--no-sandbox", "--disable-dev-shm-usage"] };
-  if (PROXY) launchOpts.proxy = PROXY;
+  if (__fydProxyEnabledBool() && __fydProxyOpts) launchOpts.proxy = __fydProxyOpts;
 
   await __fydChromiumGuard("pw");
 
   const browser = await chromium.launch(launchOpts);
   const context = await browser.newContext({
-  proxy: __fydProxyEnabledBool() ? {
-    server: String(process.env.PROXY_SERVER || "").trim(),
-    username: String(process.env.PROXY_USERNAME || process.env.PROXY_USER || "").trim(),
-    password: String(process.env.PROXY_PASSWORD || process.env.PROXY_PASS || "").trim(),
-  } : undefined,
-
     locale: "pl-PL",
     timezoneId: "Europe/Warsaw",
     userAgent:
@@ -2955,21 +3012,28 @@ async function processLink(link) {
       : String(link.last_key ?? "")
   );
 
+  if (source === "vinted") {
+    console.log("[vinted] link_id=" + link.id + " scraped=" + ((scraped||[]).length) + " lastKey=" + (lastKey ? "set" : "(empty)"));
+  }
+
   const cfg = getSourceConfig(source);
   const maxPerLoop = Number(limits?.max_items_per_link_per_loop || cfg.maxPerLoop);
   const minBatchItems = cfg.minBatchItems;
 
   const filters = safeParseFilters(link.filters);
   const filtered = (scraped || []).filter((it) => matchFilters(it, filters));
+  if (source === "vinted") {
+    console.log("[vinted] link_id=" + link.id + " filtered=" + ((filtered||[]).length) + " (after matchFilters)");
+  }
   if (!filtered.length) return;
 
   let orderedAll = source === "vinted" ? sortItemsForNotify(source, filtered) : filtered;
   orderedAll = __fydApplyUrlPriceBounds(orderedAll, __pb);
   if (!orderedAll.length) return;
-
   // baseline: nowy link -> ustaw last_key i nie wysyłaj
   if (!lastKey) {
     const newestKey = getItemKey(orderedAll[0]);
+    if (source === "vinted") console.log("[vinted] link_id=" + link.id + " baseline_set_lastKey (no notify) newestKey=" + (newestKey ? "yes" : "no"));
     if (newestKey) await updateLastKey(link.id, __fydNormalizeItemKeyFromUrl(newestKey));
     return;
   }

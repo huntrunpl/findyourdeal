@@ -71,7 +71,7 @@ function createTg(ctx) {
         const cid = String(chatId);
         const cn = await dbQuery(
           `SELECT user_id,
-                  CASE WHEN daily_count_date IS DISTINCT FROM CURRENT_DATE THEN 0 ELSE COALESCE(daily_count,0) END AS daily_count
+                  CASE WHEN daily_count_date IS DISTINCT FROM (NOW() AT TIME ZONE 'Europe/Warsaw')::date THEN 0 ELSE COALESCE(daily_count,0) END AS daily_count
            FROM public.chat_notifications
            WHERE chat_id=$1
            LIMIT 1`,
@@ -100,8 +100,8 @@ function createTg(ctx) {
 
             await dbQuery(
               `UPDATE public.chat_notifications
-               SET daily_count_date = CURRENT_DATE,
-                   daily_count = LEAST($3, CASE WHEN daily_count_date IS DISTINCT FROM CURRENT_DATE THEN 0 ELSE COALESCE(daily_count,0) END),
+               SET daily_count_date = (NOW() AT TIME ZONE 'Europe/Warsaw')::date,
+                   daily_count = LEAST($3, CASE WHEN daily_count_date IS DISTINCT FROM (NOW() AT TIME ZONE 'Europe/Warsaw')::date THEN 0 ELSE COALESCE(daily_count,0) END),
                    updated_at = NOW()
                WHERE chat_id=$1 AND user_id=$2`,
               [cid, uid, lim]

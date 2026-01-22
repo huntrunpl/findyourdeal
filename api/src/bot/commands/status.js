@@ -20,6 +20,17 @@ function formatWarsawDate(dt) {
   return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
 }
 
+function safeTz(tz) {
+  const z = String(tz || "").trim();
+  if (!z || z.length > 64) return "Europe/Warsaw";
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: z }).format(new Date());
+    return z;
+  } catch {
+    return "Europe/Warsaw";
+  }
+}
+
 export function createHandleStatus(deps) {
   const {
     tgSend,
@@ -148,19 +159,35 @@ export function createHandleStatus(deps) {
       }
     } catch {}
 
-    // dzisiejsze powiadomienia — sumarycznie po wszystkich czatach użytkownika, bieżący dzień
+    
+    // per-user timezone (default Europe/Warsaw)
+    let userTz = "Europe/Warsaw";
+    try {
+      const rTz = await dbQuery(
+        `SELECT COALESCE(NULLIF(timezone,''),'Europe/Warsaw') AS tz
+           FROM public.users
+          WHERE id=$1
+          LIMIT 1`,
+        [Number(user.id)]
+      );
+      userTz = safeTz(rTz.rows?.[0]?.tz || "Europe/Warsaw");
+    } catch {
+      userTz = "Europe/Warsaw";
+    }
+
+// dzisiejsze powiadomienia — sumarycznie po wszystkich czatach użytkownika, bieżący dzień
     let dailyCount = 0;
     try {
       const rDaily = await dbQuery(
         `SELECT COALESCE(SUM(
                   CASE
-                    WHEN daily_count_date IS DISTINCT FROM CURRENT_DATE THEN 0
+                    WHEN daily_count_date IS DISTINCT FROM (NOW() AT TIME ZONE $3)::date THEN 0
                     ELSE COALESCE(daily_count,0)
                   END
                 ),0)::int AS c
            FROM public.chat_notifications
           WHERE user_id=$1`,
-        [Number(user.id)]
+        [Number(user.id), userTz]
       );
       const c = Number(rDaily?.rows?.[0]?.c ?? 0);
       if (Number.isFinite(c) && c >= 0) dailyCount = c;
@@ -175,15 +202,15 @@ export function createHandleStatus(deps) {
           `UPDATE public.chat_notifications
               SET daily_count = LEAST(
                     CASE
-                      WHEN daily_count_date IS DISTINCT FROM CURRENT_DATE THEN 0
+                      WHEN daily_count_date IS DISTINCT FROM (NOW() AT TIME ZONE $3)::date THEN 0
                       ELSE COALESCE(daily_count,0)
                     END,
                     $2
                   ),
-                  daily_count_date = CURRENT_DATE,
+                  daily_count_date = (NOW() AT TIME ZONE $3)::date,
                   updated_at = NOW()
             WHERE user_id=$1`,
-          [Number(user.id), dailyLimit]
+          [Number(user.id), dailyLimit, userTz]
         );
       } catch {}
     }

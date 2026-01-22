@@ -29,6 +29,7 @@ import { createPlanHandlers } from "./src/bot/commands/plans.js";
 import { handleList as handleListCmd, handleAdd as handleAddCmd, handleRemove as handleRemoveCmd } from "./src/bot/commands/links.js";
 import { createHandlePanel } from "./src/bot/commands/panel.js";
 import { createHandleStatus } from "./src/bot/commands/status.js";
+import { createHandleTimezone } from "./src/bot/commands/timezone.js";
 import { createChatNotificationsHandlers } from "./src/bot/commands/chat-notifications.js";
 const { Pool } = pg;
 
@@ -79,6 +80,26 @@ const { tgSend, tgAnswerCb } = createTg({
   fixInlineButtonsI18n,
   dedupePanelLoginUrlText,
   appendUrlFromKeyboard,
+});
+
+// ---------- help/lang handlers ----------
+const { handleHelp, handleLang, handleDefault } = createHelpLangHandlers({
+  tgSend: (...a) => tgSend(...a),
+  fydResolveLang: (...a) => fydResolveLang(...a),
+  t,
+  langLabel,
+  buildLanguageKeyboard,
+  escapeHtml,
+  dbQuery,
+  clearLinkNotificationMode,
+});
+
+// ---------- timezone handler ----------
+const { handleTimezone } = createHandleTimezone({
+  tgSend: (...a) => tgSend(...a),
+  fydResolveLang: (...a) => fydResolveLang(...a),
+  dbQuery,
+  escapeHtml,
 });
 
 
@@ -339,6 +360,7 @@ async function handleUpdate(update) {
       handlePlans,
       handleBuyPlan,
       handleAddon10,
+      handleTimezone,
 
       handleCena,
       handleRozmiar,
