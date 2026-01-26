@@ -782,7 +782,7 @@ async function setPerLinkMode(chatId, userId, linkId, mode) {
 // ---------- /lang - zmiana języka ----------
 
 // Ordered list of supported languages (for consistent display in /lang)
-const LANG_CODES = ["en", "pl", "de", "fr", "it", "es", "pt", "ru", "cs", "hu", "uk"];
+const LANG_CODES = ["en", "pl", "de", "fr", "it", "es", "pt", "ru", "cs", "hu", "sk"];
 
 const SUPPORTED_LANGS = {
   "en": "English 🇬🇧",
@@ -795,7 +795,7 @@ const SUPPORTED_LANGS = {
   "ru": "Русский 🇷🇺",
   "cs": "Čeština 🇨🇿",
   "hu": "Magyar 🇭🇺",
-  "uk": "Українська 🇺🇦"
+  "sk": "Slovenčina 🇸🇰"
 };
 
 // Confirmation templates per target language
@@ -810,7 +810,7 @@ const LANG_CONFIRM = {
   ru: (name) => `✅ Язык изменён на: <b>${name}</b>`,
   cs: (name) => `✅ Jazyk změněn na: <b>${name}</b>`,
   hu: (name) => `✅ Nyelv módosítva erre: <b>${name}</b>`,
-  uk: (name) => `✅ Мову змінено на: <b>${name}</b>`
+  sk: (name) => `✅ Jazyk zmenený na: <b>${name}</b>`
 };
 
 const getLangConfirmTemplate = (lang) => LANG_CONFIRM[lang] || LANG_CONFIRM.en;
