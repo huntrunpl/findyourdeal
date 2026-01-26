@@ -79,6 +79,7 @@ export async function createPanelSession(
   await pool.query(
     `DELETE FROM panel_sessions
      WHERE user_id=$1 AND expires_at < NOW()
+     ORDER BY expires_at ASC
      LIMIT 50`,
     [userId]
   );
