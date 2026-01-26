@@ -3,7 +3,6 @@
 import { useEffect, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { LANGS, normLang, type Lang } from "../_lib/i18n";
-import { setUserLangAction } from "../auth/actions";
 
 export default function LangSwitch({ value }: { value: string }) {
   const router = useRouter();
@@ -16,8 +15,27 @@ export default function LangSwitch({ value }: { value: string }) {
 
   async function apply(next: Lang) {
     setV(next);
-    await setUserLangAction(next);
-    startTransition(() => router.refresh());
+    
+    // Call API endpoint instead of Server Action
+    try {
+      const res = await fetch("/api/user/lang", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang: next }),
+      });
+      
+      if (!res.ok) {
+        console.error("[LangSwitch] API error:", await res.text());
+        return;
+      }
+      
+      const data = await res.json();
+      console.log("[LangSwitch] Language changed to:", data.lang);
+      
+      startTransition(() => router.refresh());
+    } catch (error) {
+      console.error("[LangSwitch] Fetch error:", error);
+    }
   }
 
   return (
