@@ -2009,7 +2009,10 @@ existing.items.push(...itemsForRow);
               // nadwyżka poza limitem – ignorujemy, nie nabijamy jej do licznika
               existing.skippedExtra = 0;
             }
-            const inc = existing.items.length;
+            
+            // WAŻNE: licznik powinien liczyć WSZYSTKIE oferty (nawet te ukryte w skippedExtra),
+            // ponieważ użytkownik widzi "10 + 84 dodatkowych" i oczekuje że licznik to odzwierciedla
+            const inc = existing.items.length + (existing.skippedExtra || 0);
 
             if (inc > 0) {
               const text = buildBatchMessage(link, existing.items, existing.skippedExtra);
