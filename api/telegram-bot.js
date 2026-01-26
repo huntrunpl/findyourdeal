@@ -838,8 +838,6 @@ async function handleLanguage(msg, user) {
   if (!arg) {
     const currentLang = user.lang || "en";
     const langName = SUPPORTED_LANGS[currentLang] || "English 🇬🇧";
-    // Build language list: just names (no flags, no codes)
-    const langList = LANG_CODES.map(code => LANG_NAMES[code]).join("\n");
     
     // Build inline keyboard with language buttons (2 columns, 6 rows = 12 buttons)
     const buttons = [];
@@ -854,7 +852,7 @@ async function handleLanguage(msg, user) {
     
     await tgSend(
       chatId,
-      `🌍 Obecny język: <b>${langName}</b>\n\nDostępne:\n${langList}`,
+      `🌍 Obecny język: <b>${langName}</b>`,
       {
         reply_markup: {
           inline_keyboard: buttons
