@@ -1186,247 +1186,264 @@ async function handleQuietOff(msg) {
 }
 
 // ---------- /najnowsze ----------
-// /najnowsze - globalnie (wszystkie linki)
+// /najnowsze - ostatnio aktywny link na tym czacie
 // /najnowsze ID - dla konkretnego linku
 
 async function handleNajnowsze(msg, user, argText) {
   const chatId = String(msg.chat.id);
-  const linkId = argText ? Number(argText) : null;
+  const lang = getUserLang(user);
   const perLimit = getPerLinkItemLimit(user);
+  
+  let linkId = argText ? Number(argText) : null;
 
-  // Wersja z ID - jedna konkretna linka
-  if (linkId && Number.isFinite(linkId) && linkId > 0) {
-    // link musi należeć do usera
-    const chk = await dbQuery(
-      `SELECT id, name, url, source, last_seen_at FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
-      [linkId, user.id]
+  // Bez ID - szukamy ostatnio aktywnego linku na tym czacie
+  if (!linkId || !Number.isFinite(linkId) || linkId <= 0) {
+    const lastLinkQ = await dbQuery(
+      `SELECT id, name, url, source, last_seen_at 
+       FROM links 
+       WHERE user_id = $1 AND chat_id = $2 AND active = true 
+       ORDER BY last_seen_at DESC NULLS LAST, id DESC 
+       LIMIT 1`,
+      [user.id, chatId]
     );
 
-    if (!chk.rowCount) {
-      await tgSend(chatId, `Nie widzę linku <b>${linkId}</b> na Twoim koncie. Sprawdź <code>/lista</code>.`);
+    if (!lastLinkQ.rowCount) {
+      const noLinksMsg = lang === 'pl' ? 'Brak aktywnych wyszukiwań na tym czacie.' :
+                         lang === 'de' ? 'Keine aktiven Suchen in diesem Chat.' :
+                         lang === 'fr' ? 'Aucune recherche active dans ce chat.' :
+                         lang === 'es' ? 'No hay búsquedas activas en este chat.' :
+                         lang === 'it' ? 'Nessuna ricerca attiva in questa chat.' :
+                         lang === 'pt' ? 'Nenhuma pesquisa ativa neste chat.' :
+                         lang === 'nl' ? 'Geen actieve zoekopdrachten in deze chat.' :
+                         lang === 'cs' ? 'Žádná aktivní vyhledávání v tomto chatu.' :
+                         lang === 'ro' ? 'Nicio căutare activă în acest chat.' :
+                         lang === 'sk' ? 'Žiadne aktívne vyhľadávania v tomto chate.' :
+                         'No active searches in this chat.';
+      await tgSend(chatId, noLinksMsg);
       return;
     }
 
-    const linkRow = chk.rows[0];
-    const baseline = linkRow.last_seen_at || new Date(0);
-
-    const itemsQ = await dbQuery(
-      `
-      SELECT title, price, currency, url, first_seen_at
-      FROM link_items
-      WHERE link_id = $1 AND first_seen_at > $2
-      ORDER BY first_seen_at DESC, id DESC
-      LIMIT $3
-      `,
-      [linkId, baseline, perLimit]
-    );
-
-    const header = `🧾 Najnowsze oferty\n<b>${escapeHtml(linkRow.name || ("ID " + linkRow.id))}</b> <i>(ID ${linkRow.id})</i>\n`;
-    
-    if (!itemsQ.rowCount) {
-      await tgSend(chatId, header + "\nBrak nowych ofert od ostatniego znacznika czasu.");
-      return;
-    }
-
-    let out = header + "\n";
-    let i = 1;
-    for (const it of itemsQ.rows) {
-      const title = escapeHtml(it.title || "(bez tytułu)");
-      const priceStr = it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
-      const line =
-        `${i}. <b>${title}</b>` +
-        (priceStr ? `\n💰 ${escapeHtml(priceStr)}` : "") +
-        (it.url ? `\n${escapeHtml(it.url)}` : "") +
-        "\n\n";
-
-      if ((out + line).length > 3800) {
-        out += "… (ucięto – limit długości wiadomości)\n";
-        break;
-      }
-      out += line;
-      i++;
-    }
-
-    await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
-    return;
+    linkId = lastLinkQ.rows[0].id;
   }
 
-  // Wersja globalnie - wszystkie linki użytkownika
-  const linksQ = await dbQuery(
-    `SELECT id, name, url, source, last_seen_at FROM links WHERE user_id = $1 AND active = true ORDER BY id`,
-    [user.id]
+  // Teraz mamy linkId - pobieramy link
+  const chk = await dbQuery(
+    `SELECT id, name, url, source, last_seen_at FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
+    [linkId, user.id]
   );
 
-  if (!linksQ.rowCount) {
-    await tgSend(chatId, "Nie masz żadnych aktywnych linków.");
+  if (!chk.rowCount) {
+    const notFoundMsg = lang === 'pl' ? `Nie widzę linku <b>${linkId}</b> na Twoim koncie.` :
+                        lang === 'de' ? `Link <b>${linkId}</b> nicht in Ihrem Konto gefunden.` :
+                        lang === 'fr' ? `Lien <b>${linkId}</b> non trouvé dans votre compte.` :
+                        lang === 'es' ? `Enlace <b>${linkId}</b> no encontrado en tu cuenta.` :
+                        lang === 'it' ? `Link <b>${linkId}</b> non trovato nel tuo account.` :
+                        lang === 'pt' ? `Link <b>${linkId}</b> não encontrado na sua conta.` :
+                        lang === 'nl' ? `Link <b>${linkId}</b> niet gevonden in uw account.` :
+                        lang === 'cs' ? `Odkaz <b>${linkId}</b> nebyl nalezen na vašem účtu.` :
+                        lang === 'ro' ? `Link-ul <b>${linkId}</b> nu a fost găsit în contul tău.` :
+                        lang === 'sk' ? `Odkaz <b>${linkId}</b> nebol nájdený na vašom účte.` :
+                        `Link <b>${linkId}</b> not found in your account.`;
+    await tgSend(chatId, notFoundMsg);
     return;
   }
 
-  let globalOut = "🧾 Najnowsze oferty (globalnie)\n\n";
-  let totalItems = 0;
+  const linkRow = chk.rows[0];
+  const baseline = linkRow.last_seen_at || new Date(0);
 
-  for (const link of linksQ.rows) {
-    const baseline = link.last_seen_at || new Date(0);
-    const itemsQ = await dbQuery(
-      `
-      SELECT title, price, currency, url, first_seen_at
-      FROM link_items
-      WHERE link_id = $1 AND first_seen_at > $2
-      ORDER BY first_seen_at DESC, id DESC
-      LIMIT $3
-      `,
-      [link.id, baseline, 3] // limit 3 per link
-    );
+  const itemsQ = await dbQuery(
+    `
+    SELECT title, price, currency, url, first_seen_at
+    FROM link_items
+    WHERE link_id = $1 AND first_seen_at > $2
+    ORDER BY first_seen_at DESC, id DESC
+    LIMIT $3
+    `,
+    [linkId, baseline, perLimit]
+  );
 
-    if (itemsQ.rowCount) {
-      globalOut += `<b>${escapeHtml(link.name || ("ID " + link.id))}</b> (ID ${link.id})\n`;
-      let i = 1;
-      for (const it of itemsQ.rows) {
-        const title = escapeHtml(it.title || "(bez tytułu)");
-        const priceStr = it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
-        globalOut += `  ${i}. ${title}`;
-        if (priceStr) globalOut += ` – 💰 ${escapeHtml(priceStr)}`;
-        globalOut += "\n";
-        i++;
-        totalItems++;
-      }
-      globalOut += "\n";
+  const headerTitle = lang === 'pl' ? '🧾 Najnowsze oferty' :
+                      lang === 'de' ? '🧾 Neueste Angebote' :
+                      lang === 'fr' ? '🧾 Dernières offres' :
+                      lang === 'es' ? '🧾 Ofertas más recientes' :
+                      lang === 'it' ? '🧾 Offerte più recenti' :
+                      lang === 'pt' ? '🧾 Ofertas mais recentes' :
+                      lang === 'nl' ? '🧾 Nieuwste aanbiedingen' :
+                      lang === 'cs' ? '🧾 Nejnovější nabídky' :
+                      lang === 'ro' ? '🧾 Oferte recente' :
+                      lang === 'sk' ? '🧾 Najnovšie ponuky' :
+                      '🧾 Newest offers';
+  
+  const header = `${headerTitle}\n<b>${escapeHtml(linkRow.name || ("ID " + linkRow.id))}</b> <i>(ID ${linkRow.id})</i>\n`;
+  
+  if (!itemsQ.rowCount) {
+    const noOffersMsg = lang === 'pl' ? 'Brak nowych ofert od ostatniego znacznika czasu.' :
+                        lang === 'de' ? 'Keine neuen Angebote seit dem letzten Zeitstempel.' :
+                        lang === 'fr' ? 'Aucune nouvelle offre depuis le dernier horodatage.' :
+                        lang === 'es' ? 'No hay nuevas ofertas desde la última marca de tiempo.' :
+                        lang === 'it' ? 'Nessuna nuova offerta dall\'ultimo timestamp.' :
+                        lang === 'pt' ? 'Nenhuma oferta nova desde o último carimbo de data/hora.' :
+                        lang === 'nl' ? 'Geen nieuwe aanbiedingen sinds het laatste tijdstempel.' :
+                        lang === 'cs' ? 'Žádné nové nabídky od posledního časového razítka.' :
+                        lang === 'ro' ? 'Nicio ofertă nouă de la ultima marcă de timp.' :
+                        lang === 'sk' ? 'Žiadne nové ponuky od poslednej časovej pečiatky.' :
+                        'No new offers since last timestamp.';
+    await tgSend(chatId, header + "\n" + noOffersMsg);
+    return;
+  }
 
-      if (globalOut.length > 3800) {
-        globalOut += "… (ucięto – limit długości wiadomości)\n";
-        break;
-      }
+  let out = header + "\n";
+  let i = 1;
+  for (const it of itemsQ.rows) {
+    const title = escapeHtml(it.title || (lang === 'pl' ? '(bez tytułu)' : '(no title)'));
+    const priceStr = it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
+    const line =
+      `${i}. <b>${title}</b>` +
+      (priceStr ? `\n💰 ${escapeHtml(priceStr)}` : "") +
+      (it.url ? `\n${escapeHtml(it.url)}` : "") +
+      "\n\n";
+
+    if ((out + line).length > 3800) {
+      const cutMsg = lang === 'pl' ? '… (ucięto – limit długości wiadomości)' : '… (truncated – message length limit)';
+      out += cutMsg + "\n";
+      break;
     }
+    out += line;
+    i++;
   }
 
-  if (totalItems === 0) {
-    await tgSend(chatId, "🧾 Najnowsze oferty (globalnie)\n\nBrak nowych ofert od ostatnich znaczników czasu.");
-  } else {
-    await tgSend(chatId, globalOut.trim(), { disable_web_page_preview: true });
-  }
+  await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
 }
 
 // ---------- /najtańskie ----------
-// /najtańskie - globalnie (wszystkie linki)
+// /najtańskie - ostatnio aktywny link na tym czacie
 // /najtańskie ID - dla konkretnego linku
 
 async function handleNajtańskie(msg, user, argText) {
   const chatId = String(msg.chat.id);
-  const linkId = argText ? Number(argText) : null;
+  const lang = getUserLang(user);
   const perLimit = getPerLinkItemLimit(user);
+  
+  let linkId = argText ? Number(argText) : null;
 
-  // Wersja z ID - jedna konkretna linka
-  if (linkId && Number.isFinite(linkId) && linkId > 0) {
-    const chk = await dbQuery(
-      `SELECT id, name, url, source, last_seen_at FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
-      [linkId, user.id]
+  // Bez ID - szukamy ostatnio aktywnego linku na tym czacie
+  if (!linkId || !Number.isFinite(linkId) || linkId <= 0) {
+    const lastLinkQ = await dbQuery(
+      `SELECT id, name, url, source, last_seen_at 
+       FROM links 
+       WHERE user_id = $1 AND chat_id = $2 AND active = true 
+       ORDER BY last_seen_at DESC NULLS LAST, id DESC 
+       LIMIT 1`,
+      [user.id, chatId]
     );
 
-    if (!chk.rowCount) {
-      await tgSend(chatId, `Nie widzę linku <b>${linkId}</b> na Twoim koncie. Sprawdź <code>/lista</code>.`);
+    if (!lastLinkQ.rowCount) {
+      const noLinksMsg = lang === 'pl' ? 'Brak aktywnych wyszukiwań na tym czacie.' :
+                         lang === 'de' ? 'Keine aktiven Suchen in diesem Chat.' :
+                         lang === 'fr' ? 'Aucune recherche active dans ce chat.' :
+                         lang === 'es' ? 'No hay búsquedas activas en este chat.' :
+                         lang === 'it' ? 'Nessuna ricerca attiva in questa chat.' :
+                         lang === 'pt' ? 'Nenhuma pesquisa ativa neste chat.' :
+                         lang === 'nl' ? 'Geen actieve zoekopdrachten in deze chat.' :
+                         lang === 'cs' ? 'Žádná aktivní vyhledávání v tomto chatu.' :
+                         lang === 'ro' ? 'Nicio căutare activă în acest chat.' :
+                         lang === 'sk' ? 'Žiadne aktívne vyhľadávania v tomto chate.' :
+                         'No active searches in this chat.';
+      await tgSend(chatId, noLinksMsg);
       return;
     }
 
-    const linkRow = chk.rows[0];
-    const baseline = linkRow.last_seen_at || new Date(0);
-
-    const itemsQ = await dbQuery(
-      `
-      SELECT title, price, currency, url, first_seen_at
-      FROM link_items
-      WHERE link_id = $1 AND first_seen_at > $2 AND price IS NOT NULL
-      ORDER BY price ASC, id DESC
-      LIMIT $3
-      `,
-      [linkId, baseline, perLimit]
-    );
-
-    const header = `💰 Najtańsze oferty\n<b>${escapeHtml(linkRow.name || ("ID " + linkRow.id))}</b> <i>(ID ${linkRow.id})</i>\n`;
-    
-    if (!itemsQ.rowCount) {
-      await tgSend(chatId, header + "\nBrak ofert z ceną od ostatniego znacznika czasu.");
-      return;
-    }
-
-    let out = header + "\n";
-    let i = 1;
-    for (const it of itemsQ.rows) {
-      const title = escapeHtml(it.title || "(bez tytułu)");
-      const priceStr = it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
-      const line =
-        `${i}. <b>${title}</b>` +
-        (priceStr ? `\n💰 ${escapeHtml(priceStr)}` : "") +
-        (it.url ? `\n${escapeHtml(it.url)}` : "") +
-        "\n\n";
-
-      if ((out + line).length > 3800) {
-        out += "… (ucięto – limit długości wiadomości)\n";
-        break;
-      }
-      out += line;
-      i++;
-    }
-
-    await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
-    return;
+    linkId = lastLinkQ.rows[0].id;
   }
 
-  // Wersja globalnie - wszystkie linki użytkownika
-  const linksQ = await dbQuery(
-    `SELECT id, name, url, source, last_seen_at FROM links WHERE user_id = $1 AND active = true ORDER BY id`,
-    [user.id]
+  // Teraz mamy linkId - pobieramy link
+  const chk = await dbQuery(
+    `SELECT id, name, url, source, last_seen_at FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
+    [linkId, user.id]
   );
 
-  if (!linksQ.rowCount) {
-    await tgSend(chatId, "Nie masz żadnych aktywnych linków.");
+  if (!chk.rowCount) {
+    const notFoundMsg = lang === 'pl' ? `Nie widzę linku <b>${linkId}</b> na Twoim koncie.` :
+                        lang === 'de' ? `Link <b>${linkId}</b> nicht in Ihrem Konto gefunden.` :
+                        lang === 'fr' ? `Lien <b>${linkId}</b> non trouvé dans votre compte.` :
+                        lang === 'es' ? `Enlace <b>${linkId}</b> no encontrado en tu cuenta.` :
+                        lang === 'it' ? `Link <b>${linkId}</b> non trovato nel tuo account.` :
+                        lang === 'pt' ? `Link <b>${linkId}</b> não encontrado na sua conta.` :
+                        lang === 'nl' ? `Link <b>${linkId}</b> niet gevonden in uw account.` :
+                        lang === 'cs' ? `Odkaz <b>${linkId}</b> nebyl nalezen na vašem účtu.` :
+                        lang === 'ro' ? `Link-ul <b>${linkId}</b> nu a fost găsit în contul tău.` :
+                        lang === 'sk' ? `Odkaz <b>${linkId}</b> nebol nájdený na vašom účte.` :
+                        `Link <b>${linkId}</b> not found in your account.`;
+    await tgSend(chatId, notFoundMsg);
     return;
   }
 
-  let globalOut = "💰 Najtańsze oferty (globalnie)\n\n";
-  let totalItems = 0;
+  const linkRow = chk.rows[0];
+  const baseline = linkRow.last_seen_at || new Date(0);
 
-  for (const link of linksQ.rows) {
-    const baseline = link.last_seen_at || new Date(0);
-    const itemsQ = await dbQuery(
-      `
-      SELECT title, price, currency, url, first_seen_at
-      FROM link_items
-      WHERE link_id = $1 AND first_seen_at > $2 AND price IS NOT NULL
-      ORDER BY price ASC, id DESC
-      LIMIT $3
-      `,
-      [link.id, baseline, 3] // limit 3 per link
-    );
+  const itemsQ = await dbQuery(
+    `
+    SELECT title, price, currency, url, first_seen_at
+    FROM link_items
+    WHERE link_id = $1 AND first_seen_at > $2 AND price IS NOT NULL
+    ORDER BY price ASC, id DESC
+    LIMIT $3
+    `,
+    [linkId, baseline, perLimit]
+  );
 
-    if (itemsQ.rowCount) {
-      globalOut += `<b>${escapeHtml(link.name || ("ID " + link.id))}</b> (ID ${link.id})\n`;
-      let i = 1;
-      for (const it of itemsQ.rows) {
-        const title = escapeHtml(it.title || "(bez tytułu)");
-        const priceStr = it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
-        globalOut += `  ${i}. ${title}`;
-        if (priceStr) globalOut += ` – 💰 ${escapeHtml(priceStr)}`;
-        globalOut += "\n";
-        i++;
-        totalItems++;
-      }
-      globalOut += "\n";
+  const headerTitle = lang === 'pl' ? '💰 Najtańsze oferty' :
+                      lang === 'de' ? '💰 Günstigste Angebote' :
+                      lang === 'fr' ? '💰 Offres les moins chères' :
+                      lang === 'es' ? '💰 Ofertas más baratas' :
+                      lang === 'it' ? '💰 Offerte più economiche' :
+                      lang === 'pt' ? '💰 Ofertas mais baratas' :
+                      lang === 'nl' ? '💰 Goedkoopste aanbiedingen' :
+                      lang === 'cs' ? '💰 Nejlevnější nabídky' :
+                      lang === 'ro' ? '💰 Oferte cele mai ieftine' :
+                      lang === 'sk' ? '💰 Najlacnejšie ponuky' :
+                      '💰 Cheapest offers';
+  
+  const header = `${headerTitle}\n<b>${escapeHtml(linkRow.name || ("ID " + linkRow.id))}</b> <i>(ID ${linkRow.id})</i>\n`;
+  
+  if (!itemsQ.rowCount) {
+    const noOffersMsg = lang === 'pl' ? 'Brak ofert z ceną od ostatniego znacznika czasu.' :
+                        lang === 'de' ? 'Keine Angebote mit Preis seit dem letzten Zeitstempel.' :
+                        lang === 'fr' ? 'Aucune offre avec prix depuis le dernier horodatage.' :
+                        lang === 'es' ? 'No hay ofertas con precio desde la última marca de tiempo.' :
+                        lang === 'it' ? 'Nessuna offerta con prezzo dall\'ultimo timestamp.' :
+                        lang === 'pt' ? 'Nenhuma oferta com preço desde o último carimbo de data/hora.' :
+                        lang === 'nl' ? 'Geen aanbiedingen met prijs sinds het laatste tijdstempel.' :
+                        lang === 'cs' ? 'Žádné nabídky s cenou od posledního časového razítka.' :
+                        lang === 'ro' ? 'Nicio ofertă cu preț de la ultima marcă de timp.' :
+                        lang === 'sk' ? 'Žiadne ponuky s cenou od poslednej časovej pečiatky.' :
+                        'No offers with price since last timestamp.';
+    await tgSend(chatId, header + "\n" + noOffersMsg);
+    return;
+  }
 
-      if (globalOut.length > 3800) {
-        globalOut += "… (ucięto – limit długości wiadomości)\n";
-        break;
-      }
+  let out = header + "\n";
+  let i = 1;
+  for (const it of itemsQ.rows) {
+    const title = escapeHtml(it.title || (lang === 'pl' ? '(bez tytułu)' : '(no title)'));
+    const priceStr = it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
+    const line =
+      `${i}. <b>${title}</b>` +
+      (priceStr ? `\n💰 ${escapeHtml(priceStr)}` : "") +
+      (it.url ? `\n${escapeHtml(it.url)}` : "") +
+      "\n\n";
+
+    if ((out + line).length > 3800) {
+      const cutMsg = lang === 'pl' ? '… (ucięto – limit długości wiadomości)' : '… (truncated – message length limit)';
+      out += cutMsg + "\n";
+      break;
     }
+    out += line;
+    i++;
   }
 
-  if (totalItems === 0) {
-    await tgSend(chatId, "💰 Najtańsze oferty (globalnie)\n\nBrak ofert z ceną od ostatnich znaczników czasu.");
-  } else {
-    await tgSend(chatId, globalOut.trim(), { disable_web_page_preview: true });
-  }
+  await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
 }
-}
-
 // ---------- callback_query z przycisków (lnmode:ID:mode) ----------
 
 async function handleCallback(update) {
