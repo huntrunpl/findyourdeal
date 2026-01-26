@@ -54,11 +54,22 @@ export async function getUserLangAction(): Promise<string> {
 }
 
 export async function setUserLangAction(lang: string): Promise<{ ok: boolean; lang: string }> {
-  const userId = await getSessionUserId();
-  if (!userId) return { ok: false, lang: "en" };
+  try {
+    const userId = await getSessionUserId();
+    if (!userId) {
+      console.error("[setUserLangAction] No userId from session");
+      return { ok: false, lang: "en" };
+    }
 
-  const next = normLang(lang);
-  await pool.query(`UPDATE users SET lang=$1, language=$1 WHERE id=$2`, [next, userId]);
+    const next = normLang(lang);
+    console.log("[setUserLangAction] Updating user", userId, "to lang", next);
+    
+    const result = await pool.query(`UPDATE users SET lang=$1, language_code=$1, language=$1 WHERE id=$2`, [next, userId]);
+    console.log("[setUserLangAction] Update result:", result.rowCount, "rows affected");
 
-  return { ok: true, lang: next };
+    return { ok: true, lang: next };
+  } catch (error) {
+    console.error("[setUserLangAction] Error:", error);
+    return { ok: false, lang: "en" };
+  }
 }

@@ -28,7 +28,7 @@ function getPlanName(userOrId) {
   return String(raw).toLowerCase();
 }
 
-function getExtraLinkPacks(userOrId) {
+export function getExtraLinkPacks(userOrId) {
   if (!isUserObject(userOrId)) return 0;
   if (Number.isFinite(Number(userOrId.extra_links))) {
     return Number(userOrId.extra_links) / 10; // entitlement addons are already aggregated
