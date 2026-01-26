@@ -50,6 +50,14 @@ const pool = new Pool({
 // limit dzienny powiadomień na jeden chat – informacyjnie do /status
 const MAX_DAILY_NOTIFICATIONS = 200;
 
+// admini uprawnieni do komend typu /admin_reset
+const ADMIN_TELEGRAM_IDS = new Set(
+  String(process.env.ADMIN_TELEGRAM_IDS || "")
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
+
 // ---------- helpery ogólne ----------
 
 async function dbQuery(sql, params = []) {
@@ -67,6 +75,10 @@ function escapeHtml(str = "") {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function isAdmin(tgId) {
+  return ADMIN_TELEGRAM_IDS.has(String(tgId || ""));
 }
 
 async function tgApi(method, payload) {
@@ -183,6 +195,8 @@ const STATUS_I18N = (() => {
     },
     linksEnabled: (enabled, limit) => `Aktywne wyszukiwania (włączone): ${enabled}/${limit}`,
     linksTotal: (total, limit) => `Łącznie wyszukiwań (w bazie): ${total}/${limit}`,
+    totalOffers: (limit) => `Łączny limit ofert (zgodnie z planem): ${limit}`,
+    changeLine: "Zmiana: /on /off /pojedyncze /zbiorcze",
     dailyLimit: (limit) => `Limit dziennych powiadomień: ${limit}`,
     chatLine: (enabled, mode, daily, limit) => {
       const status = enabled ? "✅ Powiadomienia WŁĄCZONE" : "⛔ Powiadomienia WYŁĄCZONE";
@@ -192,10 +206,11 @@ const STATUS_I18N = (() => {
     },
     quietOn: (from, to) => `Cisza nocna: włączona (${from}:00–${to}:00)`,
     quietOff: "Cisza nocna: wyłączona",
-    perLinkHint: "Komendy: /on /off /pojedyncze /zbiorcze\nPer link: /pojedyncze_ID /zbiorcze_ID /off_ID /on_ID",
+    perLinkHint: "Per link: /pojedyncze_ID /zbiorcze_ID /off_ID /on_ID",
     noLinks: "Brak aktywnych wyszukiwań.",
-    linksHeader: "Lista wyszukiwań:",
-    unknown: "(błąd)"
+    linksHeader: "Wszystkie wyszukiwania:",
+    unknown: "(błąd)",
+    modeLabel: (m) => (m === "batch" ? "tryb: zbiorczo" : m === "off" ? "tryb: wyłączone" : "tryb: pojedynczo"),
   };
 
   const en = {
@@ -206,6 +221,8 @@ const STATUS_I18N = (() => {
     },
     linksEnabled: (enabled, limit) => `Active searches (enabled): ${enabled}/${limit}`,
     linksTotal: (total, limit) => `Total searches (in database): ${total}/${limit}`,
+    totalOffers: (limit) => `Total offers limit (per plan): ${limit}`,
+    changeLine: "Change: /on /off /single /batch",
     dailyLimit: (limit) => `Daily notification limit: ${limit}`,
     chatLine: (enabled, mode, daily, limit) => {
       const status = enabled ? "✅ Notifications ENABLED" : "⛔ Notifications DISABLED";
@@ -215,10 +232,11 @@ const STATUS_I18N = (() => {
     },
     quietOn: (from, to) => `Quiet hours: enabled (${from}:00–${to}:00)`,
     quietOff: "Quiet hours: disabled",
-    perLinkHint: "Commands: /on /off /single /batch\nPer link: /single_ID /batch_ID /off_ID /on_ID",
+    perLinkHint: "Per link: /single_ID /batch_ID /off_ID /on_ID",
     noLinks: "No active searches.",
-    linksHeader: "Search list:",
-    unknown: "(error)"
+    linksHeader: "Active searches:",
+    unknown: "(error)",
+    modeLabel: (m) => (m === "batch" ? "mode: batch" : m === "off" ? "mode: disabled" : "mode: single"),
   };
 
   const de = {
@@ -229,6 +247,8 @@ const STATUS_I18N = (() => {
     },
     linksEnabled: (enabled, limit) => `Aktive Suchen (aktiviert): ${enabled}/${limit}`,
     linksTotal: (total, limit) => `Suchen gesamt (in Datenbank): ${total}/${limit}`,
+    totalOffers: (limit) => `Gesamtlimit für Angebote (pro Plan): ${limit}`,
+    changeLine: "Ändern: /on /off /single /batch",
     dailyLimit: (limit) => `Tägliches Benachrichtigungslimit: ${limit}`,
     chatLine: (enabled, mode, daily, limit) => {
       const status = enabled ? "✅ Benachrichtigungen AKTIVIERT" : "⛔ Benachrichtigungen DEAKTIVIERT";
@@ -241,7 +261,8 @@ const STATUS_I18N = (() => {
     perLinkHint: "Befehle: /on /off /single /batch\nPro Link: /single_ID /batch_ID /off_ID /on_ID",
     noLinks: "Keine aktiven Suchen.",
     linksHeader: "Suchliste:",
-    unknown: "(Fehler)"
+    unknown: "(Fehler)",
+    modeLabel: (m) => (m === "batch" ? "Modus: Batch" : m === "off" ? "Modus: deaktiviert" : "Modus: einzeln"),
   };
 
   const fr = {
@@ -252,6 +273,8 @@ const STATUS_I18N = (() => {
     },
     linksEnabled: (enabled, limit) => `Recherches actives (activées): ${enabled}/${limit}`,
     linksTotal: (total, limit) => `Total des recherches (en base): ${total}/${limit}`,
+    totalOffers: (limit) => `Limite totale d'offres (par plan): ${limit}`,
+    changeLine: "Changer: /on /off /single /batch",
     dailyLimit: (limit) => `Limite quotidienne de notifications: ${limit}`,
     chatLine: (enabled, mode, daily, limit) => {
       const status = enabled ? "✅ Notifications ACTIVÉES" : "⛔ Notifications DÉSACTIVÉES";
@@ -264,7 +287,8 @@ const STATUS_I18N = (() => {
     perLinkHint: "Commandes: /on /off /single /batch\nPar lien: /single_ID /batch_ID /off_ID /on_ID",
     noLinks: "Aucune recherche active.",
     linksHeader: "Liste des recherches:",
-    unknown: "(erreur)"
+    unknown: "(erreur)",
+    modeLabel: (m) => (m === "batch" ? "mode: groupé" : m === "off" ? "mode: désactivé" : "mode: unique"),
   };
 
   const es = {
@@ -275,6 +299,8 @@ const STATUS_I18N = (() => {
     },
     linksEnabled: (enabled, limit) => `Búsquedas activas (habilitadas): ${enabled}/${limit}`,
     linksTotal: (total, limit) => `Total de búsquedas (en base de datos): ${total}/${limit}`,
+    totalOffers: (limit) => `Límite total de ofertas (por plan): ${limit}`,
+    changeLine: "Cambiar: /on /off /single /batch",
     dailyLimit: (limit) => `Límite diario de notificaciones: ${limit}`,
     chatLine: (enabled, mode, daily, limit) => {
       const status = enabled ? "✅ Notificaciones HABILITADAS" : "⛔ Notificaciones DESHABILITADAS";
@@ -287,7 +313,34 @@ const STATUS_I18N = (() => {
     perLinkHint: "Comandos: /on /off /single /batch\nPor enlace: /single_ID /batch_ID /off_ID /on_ID",
     noLinks: "No hay búsquedas activas.",
     linksHeader: "Lista de búsquedas:",
-    unknown: "(error)"
+    unknown: "(error)",
+    modeLabel: (m) => (m === "batch" ? "modo: agrupado" : m === "off" ? "modo: deshabilitado" : "modo: único"),
+  };
+
+  const sk = {
+    title: "ℹ️ Stav bota",
+    plan: (name, expStr, addons) => {
+      const line = `Plan: ${name} (do ${expStr})`;
+      return addons > 0 ? `${line}\nDoplnky (+10 liniek každý): ${addons}` : line;
+    },
+    linksEnabled: (enabled, limit) => `Aktívne vyhľadávania (zapnuté): ${enabled}/${limit}`,
+    linksTotal: (total, limit) => `Vyhľadávania spolu (v databáze): ${total}/${limit}`,
+    totalOffers: (limit) => `Celkový limit ponúk (podľa plánu): ${limit}`,
+    changeLine: "Zmena: /on /off /single /batch",
+    dailyLimit: (limit) => `Denný limit notifikácií: ${limit}`,
+    chatLine: (enabled, mode, daily, limit) => {
+      const status = enabled ? "✅ Notifikácie ZAPNUTÉ" : "⛔ Notifikácie VYPNUTÉ";
+      const modeText = mode === "batch" ? "hromadne" : mode === "off" ? "vypnuté" : "jednotlivo";
+      const dailyText = `Dnešné notifikácie: ${daily}/${limit}`;
+      return `${status}\nPredvolený režim pre tento chat: ${modeText}\n${dailyText}`;
+    },
+    quietOn: (from, to) => `Tichý režim: zapnutý (${from}:00–${to}:00)`,
+    quietOff: "Tichý režim: vypnutý",
+    perLinkHint: "Na link: /single_ID /batch_ID /off_ID /on_ID",
+    noLinks: "Žiadne aktívne vyhľadávania.",
+    linksHeader: "Aktívne vyhľadávania:",
+    unknown: "(chyba)",
+    modeLabel: (m) => (m === "batch" ? "režim: hromadne" : m === "off" ? "režim: vypnuté" : "režim: jednotlivo"),
   };
 
   return {
@@ -301,7 +354,7 @@ const STATUS_I18N = (() => {
     ru: en,
     cs: en,
     hu: en,
-    uk: en
+    sk
   };
 })();
 
@@ -329,6 +382,7 @@ async function buildStatusMessage(chatId, user) {
 
   const linkLimit = Number(user.links_limit_total ?? getEffectiveLinkLimit(user) ?? 0) || 0;
   const dailyLimit = Number(user.daily_notifications_limit ?? MAX_DAILY_NOTIFICATIONS) || MAX_DAILY_NOTIFICATIONS;
+  const totalOffersLimit = Number(user.history_limit_total ?? (getPerLinkItemLimit(user) * linkLimit) ?? 0) || 0;
   const planCode = user.plan_code || user.plan_name || "-";
   const planName = user.plan_name || user.plan_code || "-";
   const planExp = formatDateYMD(user.plan_expires_at || user.expires_at);
@@ -338,7 +392,7 @@ async function buildStatusMessage(chatId, user) {
 
   // stderr is always unbuffered in Node.js, unlike stdout in non-TTY environments
   process.stderr.write(
-    `[status_debug] user_id=${userId} lang=${lang} plan_code=${planCode} link_limit=${linkLimit} daily_limit=${dailyLimit} lang_col=${user.lang} lang_code=${user.language_code}\n`
+    `[status_debug] user_id=${userId} lang=${lang} plan_code=${planCode} link_limit=${linkLimit} daily_limit=${dailyLimit} total_offers_limit=${totalOffersLimit} source=entitlements.history_limit_total lang_col=${user.lang} lang_code=${user.language_code}\n`
   );
 
   let text = `${t.title}\n\n`;
@@ -350,10 +404,13 @@ async function buildStatusMessage(chatId, user) {
     const enabledLinks = await countEnabledLinksForUserId(userId);
     text += `${t.linksEnabled(enabledLinks, linkLimit)}\n`;
     text += `${t.linksTotal(totalLinks, linkLimit)}\n`;
+    if (totalOffersLimit) {
+      text += `${t.totalOffers(totalOffersLimit)}\n`;
+    }
     if (dailyLimit) {
       text += `${t.dailyLimit(dailyLimit)}\n`;
     }
-    text += `\n`;
+    text += `\n${t.changeLine}\n\n`;
   } catch (e) {
     console.error("buildStatusMessage: link counters error", e);
   }
@@ -361,6 +418,7 @@ async function buildStatusMessage(chatId, user) {
   // Chat notification settings
   const todayStr = new Date().toISOString().slice(0, 10);
   let chatDefaultMode = "single";
+  let chatEnabled = true;
   try {
     const res = await dbQuery(
       `
@@ -374,6 +432,7 @@ async function buildStatusMessage(chatId, user) {
     if (res.rowCount) {
       const row = res.rows[0];
       const enabled = row.enabled !== false;
+      chatEnabled = enabled;
       const mode = (row.mode || "single").toLowerCase();
       chatDefaultMode = mode;
 
@@ -450,8 +509,10 @@ async function buildStatusMessage(chatId, user) {
             ? "off"
             : "single";
 
-        const state = row.active ? "✅" : "⛔";
-        text += `• ${state} ${row.id} – ${escapeHtml(name)} (${src}) – mode: ${mode}\n`;
+        const state = (mode === "off" || !row.active) ? "⛔" : "✅";
+        const bell = chatEnabled && mode !== "off" ? "🔔" : "";
+        const modeText = t.modeLabel(mode);
+        text += `• ${state}${bell ? bell : ""} ${row.id} – ${escapeHtml(name)} (${src}) – ${modeText}\n`;
       }
 
       text += `\n${t.perLinkHint}`;
@@ -680,25 +741,41 @@ async function handleStatus(msg, user) {
 
 async function handleNotificationsOn(msg, user) {
   const chatId = String(msg.chat.id);
+  const lang = getUserLang(user);
+  const t = CMD_I18N[lang] || CMD_I18N.en;
 
   await ensureChatNotificationsRow(chatId, user.id);
 
+  // reset notify_from (zaczynam zbierać oferty od teraz)
   await dbQuery(
     `
-    INSERT INTO chat_notifications (chat_id, user_id, enabled, mode, updated_at)
-    VALUES ($1, $2, TRUE, 'single', NOW())
+    INSERT INTO chat_notifications (chat_id, user_id, enabled, mode, updated_at, notify_from)
+    VALUES ($1, $2, TRUE, 'single', NOW(), NOW())
     ON CONFLICT (chat_id, user_id) DO UPDATE SET
       enabled = TRUE,
-      updated_at = NOW()
+      updated_at = NOW(),
+      notify_from = NOW()
     `,
     [chatId, user.id]
   );
 
-  await tgSend(chatId, "✅ Powiadomienia WŁĄCZONE na tym czacie.");
+  // reset notify_from dla wszystkich aktywnych linków tego użytkownika
+  await dbQuery(
+    `
+    UPDATE links
+    SET notify_from = NOW()
+    WHERE user_id = $1 AND active = TRUE
+    `,
+    [user.id]
+  );
+
+  await tgSend(chatId, t.notifOn);
 }
 
 async function handleNotificationsOff(msg, user) {
   const chatId = String(msg.chat.id);
+  const lang = getUserLang(user);
+  const t = CMD_I18N[lang] || CMD_I18N.en;
 
   await ensureChatNotificationsRow(chatId, user.id);
 
@@ -713,13 +790,65 @@ async function handleNotificationsOff(msg, user) {
     [chatId, user.id]
   );
 
-  await tgSend(chatId, "⛔ Powiadomienia WYŁĄCZONE na tym czacie.");
+  await tgSend(chatId, t.notifOff);
+}
+
+// ---------- /admin_reset /areset ----------
+
+async function handleAdminReset(msg, _user, argText) {
+  const callerTgId = msg?.from?.id;
+  if (!isAdmin(callerTgId)) {
+    await tgSend(msg.chat.id, "❌ Unauthorized (admin only).");
+    return;
+  }
+
+  const targetTgId = String(argText || "").trim();
+  if (!targetTgId) {
+    await tgSend(msg.chat.id, "❌ Podaj Telegram ID: /admin_reset <telegram_id>");
+    return;
+  }
+
+  const targetUser = await getUserWithPlanByTelegramId(targetTgId);
+  if (!targetUser) {
+    await tgSend(msg.chat.id, `❌ User not found for Telegram ID ${escapeHtml(targetTgId)}`);
+    return;
+  }
+
+  const chatRes = await dbQuery(
+    `
+    UPDATE chat_notifications
+    SET daily_count = 0,
+        daily_count_date = CURRENT_DATE,
+        notify_from = NOW(),
+        updated_at = NOW()
+    WHERE user_id = $1
+    `,
+    [Number(targetUser.id)]
+  );
+
+  const linkRes = await dbQuery(
+    `
+    UPDATE links
+    SET notify_from = NOW(),
+        updated_at = NOW()
+    WHERE user_id = $1 AND active = TRUE
+    `,
+    [Number(targetUser.id)]
+  );
+
+  const nowIso = new Date().toISOString();
+  await tgSend(
+    msg.chat.id,
+    `✅ Admin reset done for TG ${escapeHtml(targetTgId)}. Chats updated: ${chatRes.rowCount}. Active links reset: ${linkRes.rowCount}. Since=${nowIso}`
+  );
 }
 
 // ---------- /pojedyncze /zbiorcze (domyślny tryb czatu) ----------
 
 async function handleModeSingle(msg, user) {
   const chatId = String(msg.chat.id);
+  const lang = getUserLang(user);
+  const t = CMD_I18N[lang] || CMD_I18N.en;
 
   await ensureChatNotificationsRow(chatId, user.id);
 
@@ -732,11 +861,13 @@ async function handleModeSingle(msg, user) {
     [chatId, user.id]
   );
 
-  await tgSend(chatId, "📨 Ustawiono tryb: <b>pojedynczo</b> (domyślny na tym czacie).");
+  await tgSend(chatId, t.modeSingle);
 }
 
 async function handleModeBatch(msg, user) {
   const chatId = String(msg.chat.id);
+  const lang = getUserLang(user);
+  const t = CMD_I18N[lang] || CMD_I18N.en;
 
   await ensureChatNotificationsRow(chatId, user.id);
 
@@ -749,7 +880,7 @@ async function handleModeBatch(msg, user) {
     [chatId, user.id]
   );
 
-  await tgSend(chatId, "📦 Ustawiono tryb: <b>zbiorczo</b> (domyślny na tym czacie).");
+  await tgSend(chatId, t.modeBatch);
 }
 
 // ---------- tryb per-link na tym czacie ----------
@@ -784,7 +915,6 @@ async function setPerLinkMode(chatId, userId, linkId, mode) {
 // Ordered list of supported languages (for consistent display in /lang)
 const LANG_CODES = ["en", "pl", "de", "fr", "it", "es", "pt", "ru", "cs", "hu", "sk"];
 
-// Language names with flags (for buttons)
 const SUPPORTED_LANGS = {
   "en": "English 🇬🇧",
   "pl": "Polski 🇵🇱",
@@ -799,65 +929,154 @@ const SUPPORTED_LANGS = {
   "sk": "Slovenčina 🇸🇰"
 };
 
-// Language names without flags (for text display)
-const LANG_NAMES = {
-  "en": "English",
-  "pl": "Polski",
-  "de": "Deutsch",
-  "fr": "Français",
-  "it": "Italiano",
-  "es": "Español",
-  "pt": "Português",
-  "ru": "Русский",
-  "cs": "Čeština",
-  "hu": "Magyar",
-  "sk": "Slovenčina"
-};
-
 // Confirmation templates per target language
 const LANG_CONFIRM = {
-  en: (name) => `✅ Language changed to: ${name}`,
-  pl: (name) => `✅ Język zmieniony na: ${name}`,
-  de: (name) => `✅ Sprache geändert zu: ${name}`,
-  fr: (name) => `✅ Langue changée en : ${name}`,
-  it: (name) => `✅ Lingua cambiata in: ${name}`,
-  es: (name) => `✅ Idioma cambiado a: ${name}`,
-  pt: (name) => `✅ Idioma alterado para: ${name}`,
-  ru: (name) => `✅ Язык изменён на: ${name}`,
-  cs: (name) => `✅ Jazyk změněn na: ${name}`,
-  hu: (name) => `✅ Nyelv módosítva erre: ${name}`,
-  sk: (name) => `✅ Jazyk zmenený na: ${name}`
+  en: (name) => `✅ Language changed to: <b>${name}</b>`,
+  pl: (name) => `✅ Język zmieniony na: <b>${name}</b>`,
+  de: (name) => `✅ Sprache geändert zu: <b>${name}</b>`,
+  fr: (name) => `✅ Langue changée en : <b>${name}</b>`,
+  it: (name) => `✅ Lingua cambiata in: <b>${name}</b>`,
+  es: (name) => `✅ Idioma cambiado a: <b>${name}</b>`,
+  pt: (name) => `✅ Idioma alterado para: <b>${name}</b>`,
+  ru: (name) => `✅ Язык изменён на: <b>${name}</b>`,
+  cs: (name) => `✅ Jazyk změněn na: <b>${name}</b>`,
+  hu: (name) => `✅ Nyelv módosítva erre: <b>${name}</b>`,
+  sk: (name) => `✅ Jazyk zmenený na: <b>${name}</b>`
+};
+
+// Tłumaczenia dla /lang komend
+const LANG_I18N = {
+  en: {
+    currentLanguage: "🌍 Current language: ",
+    available: "Available languages:",
+    unknown: "❌ Unknown language. Supported: "
+  },
+  pl: {
+    currentLanguage: "🌍 Obecny język: ",
+    available: "Dostępne języki:",
+    unknown: "❌ Nieznany język. Obsługiwane: "
+  },
+  de: {
+    currentLanguage: "🌍 Aktuelle Sprache: ",
+    available: "Verfügbare Sprachen:",
+    unknown: "❌ Unbekannte Sprache. Unterstützt: "
+  },
+  fr: {
+    currentLanguage: "🌍 Langue actuelle : ",
+    available: "Langues disponibles :",
+    unknown: "❌ Langue inconnue. Supportées : "
+  },
+  it: {
+    currentLanguage: "🌍 Lingua attuale: ",
+    available: "Lingue disponibili:",
+    unknown: "❌ Lingua sconosciuta. Supportate: "
+  },
+  es: {
+    currentLanguage: "🌍 Idioma actual: ",
+    available: "Idiomas disponibles:",
+    unknown: "❌ Idioma desconocido. Soportados: "
+  },
+  pt: {
+    currentLanguage: "🌍 Idioma atual: ",
+    available: "Idiomas disponíveis:",
+    unknown: "❌ Idioma desconhecido. Suportados: "
+  },
+  ru: {
+    currentLanguage: "🌍 Текущий язык: ",
+    available: "Доступные языки:",
+    unknown: "❌ Неизвестный язык. Поддерживаемые: "
+  },
+  cs: {
+    currentLanguage: "🌍 Současný jazyk: ",
+    available: "Dostupné jazyky:",
+    unknown: "❌ Neznámý jazyk. Podporované: "
+  },
+  hu: {
+    currentLanguage: "🌍 Jelenlegi nyelv: ",
+    available: "Elérhető nyelvek:",
+    unknown: "❌ Ismeretlen nyelv. Támogatott: "
+  },
+  sk: {
+    currentLanguage: "🌍 Aktuálny jazyk: ",
+    available: "Dostupné jazyky:",
+    unknown: "❌ Neznámy jazyk. Podporované: "
+  }
 };
 
 const getLangConfirmTemplate = (lang) => LANG_CONFIRM[lang] || LANG_CONFIRM.en;
+
+// Komunikaty i18n dla poleceń (ON/OFF, tryby, per-link, cisza)
+const CMD_I18N = {
+  pl: {
+    notifOn: "✅ Powiadomienia WŁĄCZONE na tym czacie.",
+    notifOff: "⛔ Powiadomienia WYŁĄCZONE na tym czacie.",
+    modeSingle: "📨 Ustawiono tryb: <b>pojedynczo</b> (domyślny na tym czacie).",
+    modeBatch: "📦 Ustawiono tryb: <b>zbiorczo</b> (domyślny na tym czacie).",
+    linkEnabled: (id, prettyMode) => `✅ Link <b>${id}</b> na tym czacie WŁĄCZONY (dziedziczy tryb czatu: <b>${prettyMode}</b>).`,
+    linkSet: (id, prettyMode) => `✅ Link <b>${id}</b> na tym czacie ustawiony: <b>${prettyMode}</b>`,
+    linkNotYours: (id) => `❌ Link <b>${id}</b> nie należy do Twojego konta.`,
+    setModeFail: (reason) => `❌ ${reason || "Nie udało się ustawić trybu."}`,
+    quietSet: (from, to) => `🌙 Ustawiono ciszę nocną: <b>${from}:00–${to}:00</b>`,
+    quietOn: (from, to) => `🌙 Cisza nocna: <b>WŁĄCZONA</b>, godziny ${from}:00–${to}:00`,
+    quietOff: "🌙 Cisza nocna: <b>WYŁĄCZONA</b>",
+  },
+  en: {
+    notifOn: "✅ Notifications ENABLED on this chat.",
+    notifOff: "⛔ Notifications DISABLED on this chat.",
+    modeSingle: "📨 Default mode set: <b>single</b> (for this chat).",
+    modeBatch: "📦 Default mode set: <b>batch</b> (for this chat).",
+    linkEnabled: (id, prettyMode) => `✅ Link <b>${id}</b> ENABLED on this chat (inherits chat mode: <b>${prettyMode}</b>).`,
+    linkSet: (id, prettyMode) => `✅ Link <b>${id}</b> set to: <b>${prettyMode}</b> on this chat`,
+    linkNotYours: (id) => `❌ Link <b>${id}</b> does not belong to your account.`,
+    setModeFail: (reason) => `❌ ${reason || "Failed to set mode."}`,
+    quietSet: (from, to) => `🌙 Quiet hours set: <b>${from}:00–${to}:00</b>`,
+    quietOn: (from, to) => `🌙 Quiet hours: <b>ENABLED</b>, ${from}:00–${to}:00`,
+    quietOff: "🌙 Quiet hours: <b>DISABLED</b>",
+  }
+};
+
+function getUserLang(user) {
+  return normalizeLangCode(user?.language_code || user?.lang || user?.language || "en");
+}
+
+function modePretty(lang, mode) {
+  const m = String(mode || "single").toLowerCase();
+  if (lang === "pl") return m === "batch" ? "zbiorczo" : m === "off" ? "OFF" : "pojedynczo";
+  return m === "batch" ? "batch" : m === "off" ? "OFF" : "single";
+}
 
 async function handleLanguage(msg, user) {
   const chatId = String(msg.chat.id);
   const arg = (msg.text || "").trim().split(/\s+/).slice(1).join(" ").trim().toLowerCase();
 
+  const currentLang = user.lang || "en";
+  const t = LANG_I18N[currentLang] || LANG_I18N.en;
+
   if (!arg) {
-    const currentLang = user.lang || "en";
-    const langName = SUPPORTED_LANGS[currentLang] || "English 🇬🇧";
+    const langName = SUPPORTED_LANGS[currentLang] || "English";
     
-    // Build inline keyboard with language buttons (2 columns, 6 rows = 12 buttons)
-    const buttons = [];
-    for (let i = 0; i < LANG_CODES.length; i += 2) {
+    // Build inline keyboard with 2 columns
+    const langCodes = Object.keys(SUPPORTED_LANGS);
+    const keyboard = [];
+    for (let i = 0; i < langCodes.length; i += 2) {
       const row = [];
-      row.push({ text: `${SUPPORTED_LANGS[LANG_CODES[i]]}`, callback_data: `setlang:${LANG_CODES[i]}` });
-      if (i + 1 < LANG_CODES.length) {
-        row.push({ text: `${SUPPORTED_LANGS[LANG_CODES[i + 1]]}`, callback_data: `setlang:${LANG_CODES[i + 1]}` });
+      row.push({
+        text: SUPPORTED_LANGS[langCodes[i]],
+        callback_data: `setlang:${langCodes[i]}`
+      });
+      if (i + 1 < langCodes.length) {
+        row.push({
+          text: SUPPORTED_LANGS[langCodes[i + 1]],
+          callback_data: `setlang:${langCodes[i + 1]}`
+        });
       }
-      buttons.push(row);
+      keyboard.push(row);
     }
     
     await tgSend(
       chatId,
-      `🌍 Obecny język: <b>${langName}</b>`,
-      {
-        reply_markup: {
-          inline_keyboard: buttons
-        }
-      }
+      `${t.currentLanguage}<b>${langName}</b>\n\n${t.available}`,
+      { reply_markup: { inline_keyboard: keyboard } }
     );
     return;
   }
@@ -867,8 +1086,8 @@ async function handleLanguage(msg, user) {
   
   if (!SUPPORTED_LANGS[normalized]) {
     // Use comma-separated codes for error message (short format)
-    const langList = LANG_CODES.join(", ");
-    await tgSend(chatId, `❌ Nieznany język. Obsługiwane: ${langList}`);
+    const langList = Object.keys(SUPPORTED_LANGS).join(", ");
+    await tgSend(chatId, `${t.unknown}${langList}`);
     return;
   }
 
@@ -885,7 +1104,7 @@ async function handleLanguage(msg, user) {
   );
   process.stderr.write(`[lang_debug] Update completed for user ${user.id}\n`);
 
-  const langName = LANG_NAMES[normalized];
+  const langName = SUPPORTED_LANGS[normalized];
   const confirmTemplate = getLangConfirmTemplate(normalized);
   await tgSend(chatId, confirmTemplate(langName));
 }
@@ -894,14 +1113,16 @@ async function handleLanguage(msg, user) {
 
 async function handleQuiet(msg) {
   const chatId = String(msg.chat.id);
+  const lang = getUserLang({ lang: (await getUserWithPlanByTelegramId(String(msg.from?.id || "")))?.lang, language_code: msg.from?.language_code });
+  const t = CMD_I18N[lang] || CMD_I18N.en;
   const arg = (msg.text || "").trim().split(/\s+/).slice(1).join(" ").trim();
 
   if (!arg) {
     const qh = await getQuietHours(chatId);
     if (qh?.quiet_enabled) {
-      await tgSend(chatId, `🌙 Cisza nocna: <b>WŁĄCZONA</b>, godziny ${qh.quiet_from}:00–${qh.quiet_to}:00`);
+      await tgSend(chatId, t.quietOn(qh.quiet_from ?? 22, qh.quiet_to ?? 7));
     } else {
-      await tgSend(chatId, "🌙 Cisza nocna: <b>wyłączona</b>.\nUstaw: <code>/cisza 22-7</code>");
+      await tgSend(chatId, `${t.quietOff}\nUstaw: <code>/cisza 22-7</code>`);
     }
     return;
   }
@@ -924,15 +1145,15 @@ async function handleQuiet(msg) {
   }
 
   await setQuietHours(chatId, fromHour, toHour);
-  await tgSend(chatId, `🌙 Ustawiono ciszę nocną: <b>${fromHour}:00–${toHour}:00</b>`);
+  await tgSend(chatId, t.quietSet(fromHour, toHour));
 }
 
 async function handleQuietOff(msg) {
   const chatId = String(msg.chat.id);
+  const lang = getUserLang({ lang: (await getUserWithPlanByTelegramId(String(msg.from?.id || "")))?.lang, language_code: msg.from?.language_code });
   await disableQuietHours(chatId);
-  const confirmTemplate = getLangConfirmTemplate(normalized);
-  await tgSend(chatId, confirmTemplate(langName));
-  await tgSend(chatId, "🌙 Cisza nocna: <b>WYŁĄCZONA</b>");
+  const t = CMD_I18N[lang] || CMD_I18N.en;
+  await tgSend(chatId, t.quietOff);
 }
 
 // ---------- /najnowsze ----------
@@ -1033,28 +1254,30 @@ async function handleCallback(update) {
 
     const res = await setPerLinkMode(String(chatId), userId, linkId, mode);
     if (!res.ok) {
-      await tgAnswerCb(cq.id, res.reason || "Nie udało się ustawić trybu.", true);
+      // Localized error (fallback EN)
+      await tgAnswerCb(cq.id, res.reason || "Failed to set mode.", true);
       return;
     }
 
-    const pretty =
-      res.mode === "batch" ? "zbiorczo" : res.mode === "off" ? "OFF" : "pojedynczo";
-
-    await tgAnswerCb(cq.id, `Ustawiono: ${pretty}`);
+    // Localized confirmation (fallback EN)
+    const user = await getUserById(userId);
+    const lang = getUserLang(user);
+    const pretty = modePretty(lang, res.mode);
+    await tgAnswerCb(cq.id, `✓ ${pretty}`);
     return;
   }
 
-  // setlang:<lang_code>
+  // setlang:<langCode>
   const langMatch = data.match(/^setlang:([a-z]{2})$/i);
   if (langMatch) {
     const langCode = langMatch[1].toLowerCase();
+    
     if (!SUPPORTED_LANGS[langCode]) {
-      await tgAnswerCb(cq.id, "❌ Nieznany język.", true);
+      await tgAnswerCb(cq.id, "Nieznany język.", true);
       return;
     }
-
-    // Update user language
-    process.stderr.write(`[lang_debug] Updating user ${userId} lang from ${cq.from?.language_code || 'unknown'} to ${langCode} (via callback)\n`);
+    
+    // Update user's language
     await dbQuery(
       `UPDATE users
        SET lang = $1,
@@ -1064,14 +1287,21 @@ async function handleCallback(update) {
        WHERE id = $2`,
       [langCode, userId]
     );
-
-    const langName = LANG_NAMES[langCode];
+    
+    process.stderr.write(`[lang_debug] Updating user ${userId} lang from ${cq.from.language_code || 'unknown'} to ${langCode} (via callback)\n`);
+    
+    const langName = SUPPORTED_LANGS[langCode];
     const confirmTemplate = getLangConfirmTemplate(langCode);
-    await tgAnswerCb(cq.id, confirmTemplate(langName));
+    
+    // Answer callback and edit message
+    await tgAnswerCb(cq.id, `✓ ${langName}`);
+    
+    // Send new message with confirmation
+    await tgSend(String(chatId), confirmTemplate(langName));
     return;
   }
 
-  await tgAnswerCb(cq.id, "Nieznana akcja.");
+  await tgAnswerCb(cq.id, "Unknown action.");
 }
 
 // ---------- obsługa pojedynczego update ----------
@@ -1146,6 +1376,12 @@ await ensureUser(
   const command = commandRaw.toLowerCase().split("\@")[0];
   const argText = rest.join(" ").trim();
 
+  // komendy admina
+  if (command === "/admin_reset" || command === "/areset") {
+    await handleAdminReset(msg, user, argText);
+    return;
+  }
+
 // komendy per-link: /pojedyncze_18 /zbiorcze_18 /off_18 /on_18
 const perLink = command.match(/^\/(pojedyncze|zbiorcze|off|on)_(\d+)$/i);
 if (perLink) {
@@ -1154,30 +1390,34 @@ if (perLink) {
 
   // /on_ID = usuń override (wraca do domyślnego trybu czatu)
   if (kind === "on") {
+    const lang = getUserLang(user);
+    const t = CMD_I18N[lang] || CMD_I18N.en;
     // zabezpieczenie: link musi należeć do usera
     const chk = await dbQuery(
       `SELECT id FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
       [Number(linkId), Number(user.id)]
     );
     if (!chk.rowCount) {
-      await tgSend(chatId, `❌ Link <b>${linkId}</b> nie należy do Twojego konta.`);
+      await tgSend(chatId, t.linkNotYours(linkId));
       return;
     }
 
     await clearLinkNotificationMode(user.id, String(chatId), linkId);
+
+    // reset notify_from dla tego konkretnego linku (zaczynam zbierać oferty od teraz)
+    await dbQuery(
+      `UPDATE links SET notify_from = NOW() WHERE id = $1 AND user_id = $2`,
+      [Number(linkId), Number(user.id)]
+    );
 
     // odczytaj domyślny tryb czatu (żeby ładnie potwierdzić)
     const cn = await dbQuery(
       `SELECT mode FROM chat_notifications WHERE chat_id = $1 AND user_id = $2 LIMIT 1`,
       [String(chatId), Number(user.id)]
     );
-    const chatMode =
-      (cn.rows[0]?.mode || "single").toLowerCase() === "batch" ? "zbiorczo" : "pojedynczo";
-
-    await tgSend(
-      chatId,
-      `✅ Link <b>${linkId}</b> na tym czacie WŁĄCZONY (dziedziczy tryb czatu: <b>${chatMode}</b>).`
-    );
+    const chatModeRaw = (cn.rows[0]?.mode || "single").toLowerCase();
+    const chatModePretty = modePretty(lang, chatModeRaw);
+    await tgSend(chatId, t.linkEnabled(linkId, chatModePretty));
     return;
   }
 
@@ -1185,14 +1425,12 @@ if (perLink) {
   const res = await setPerLinkMode(String(chatId), user.id, linkId, mode);
 
   if (!res.ok) {
-    await tgSend(chatId, `❌ ${escapeHtml(res.reason || "Nie udało się ustawić trybu.")}`);
+    await tgSend(chatId, t.setModeFail(res.reason));
     return;
   }
 
-  const pretty =
-    res.mode === "batch" ? "zbiorczo" : res.mode === "off" ? "OFF" : "pojedynczo";
-
-  await tgSend(chatId, `✅ Link <b>${linkId}</b> na tym czacie ustawiony: <b>${pretty}</b>`);
+  const pretty = modePretty(lang, res.mode);
+  await tgSend(chatId, t.linkSet(linkId, pretty));
   return;
 }
 
