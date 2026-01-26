@@ -50,6 +50,14 @@ const pool = new Pool({
 // limit dzienny powiadomień na jeden chat – informacyjnie do /status
 const MAX_DAILY_NOTIFICATIONS = 200;
 
+// admini uprawnieni do komend typu /admin_reset
+const ADMIN_TELEGRAM_IDS = new Set(
+  String(process.env.ADMIN_TELEGRAM_IDS || "")
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
+
 // ---------- helpery ogólne ----------
 
 async function dbQuery(sql, params = []) {
@@ -67,6 +75,10 @@ function escapeHtml(str = "") {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+function isAdmin(tgId) {
+  return ADMIN_TELEGRAM_IDS.has(String(tgId || ""));
 }
 
 async function tgApi(method, payload) {
@@ -781,6 +793,56 @@ async function handleNotificationsOff(msg, user) {
   await tgSend(chatId, t.notifOff);
 }
 
+// ---------- /admin_reset /areset ----------
+
+async function handleAdminReset(msg, _user, argText) {
+  const callerTgId = msg?.from?.id;
+  if (!isAdmin(callerTgId)) {
+    await tgSend(msg.chat.id, "❌ Unauthorized (admin only).");
+    return;
+  }
+
+  const targetTgId = String(argText || "").trim();
+  if (!targetTgId) {
+    await tgSend(msg.chat.id, "❌ Podaj Telegram ID: /admin_reset <telegram_id>");
+    return;
+  }
+
+  const targetUser = await getUserWithPlanByTelegramId(targetTgId);
+  if (!targetUser) {
+    await tgSend(msg.chat.id, `❌ User not found for Telegram ID ${escapeHtml(targetTgId)}`);
+    return;
+  }
+
+  const chatRes = await dbQuery(
+    `
+    UPDATE chat_notifications
+    SET daily_count = 0,
+        daily_count_date = CURRENT_DATE,
+        notify_from = NOW(),
+        updated_at = NOW()
+    WHERE user_id = $1
+    `,
+    [Number(targetUser.id)]
+  );
+
+  const linkRes = await dbQuery(
+    `
+    UPDATE links
+    SET notify_from = NOW(),
+        updated_at = NOW()
+    WHERE user_id = $1 AND active = TRUE
+    `,
+    [Number(targetUser.id)]
+  );
+
+  const nowIso = new Date().toISOString();
+  await tgSend(
+    msg.chat.id,
+    `✅ Admin reset done for TG ${escapeHtml(targetTgId)}. Chats updated: ${chatRes.rowCount}. Active links reset: ${linkRes.rowCount}. Since=${nowIso}`
+  );
+}
+
 // ---------- /pojedyncze /zbiorcze (domyślny tryb czatu) ----------
 
 async function handleModeSingle(msg, user) {
@@ -1313,6 +1375,12 @@ await ensureUser(
   const [commandRaw, ...rest] = text.split(/\s+/);
   const command = commandRaw.toLowerCase().split("\@")[0];
   const argText = rest.join(" ").trim();
+
+  // komendy admina
+  if (command === "/admin_reset" || command === "/areset") {
+    await handleAdminReset(msg, user, argText);
+    return;
+  }
 
 // komendy per-link: /pojedyncze_18 /zbiorcze_18 /off_18 /on_18
 const perLink = command.match(/^\/(pojedyncze|zbiorcze|off|on)_(\d+)$/i);
