@@ -781,6 +781,9 @@ async function setPerLinkMode(chatId, userId, linkId, mode) {
 
 // ---------- /lang - zmiana języka ----------
 
+// Ordered list of supported languages (for consistent display in /lang)
+const LANG_CODES = ["en", "pl", "de", "fr", "it", "es", "pt", "ru", "cs", "hu", "uk"];
+
 const SUPPORTED_LANGS = {
   "en": "English 🇬🇧",
   "pl": "Polski 🇵🇱",
@@ -819,7 +822,8 @@ async function handleLanguage(msg, user) {
   if (!arg) {
     const currentLang = user.lang || "en";
     const langName = SUPPORTED_LANGS[currentLang] || "English";
-    const langList = Object.keys(SUPPORTED_LANGS).map(k => `<code>${k}</code> (${SUPPORTED_LANGS[k]})`).join(", ");
+    // Build language list with each language on its own line (avoids Telegram line breaks)
+    const langList = LANG_CODES.map(code => `<code>${code}</code> (${SUPPORTED_LANGS[code]})`).join("\n");
     await tgSend(
       chatId,
       `🌍 Obecny język: <b>${langName}</b>\n\nDostępne:\n${langList}\n\nUstaw: <code>/lang en</code> lub <code>/lang pl</code>, itp.`
@@ -831,7 +835,8 @@ async function handleLanguage(msg, user) {
   const normalized = arg.split("-")[0].toLowerCase();
   
   if (!SUPPORTED_LANGS[normalized]) {
-    const langList = Object.keys(SUPPORTED_LANGS).join(", ");
+    // Use comma-separated codes for error message (short format)
+    const langList = LANG_CODES.join(", ");
     await tgSend(chatId, `❌ Nieznany język. Obsługiwane: ${langList}`);
     return;
   }
