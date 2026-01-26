@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { pool } from "../../lib/db";
 import { getSessionUserId } from "../../lib/auth";
 
@@ -42,6 +43,7 @@ export async function toggleLinkActive(formData: FormData) {
   ]);
 
   revalidatePath("/links");
+  redirect("/links");
 }
 
 export async function resetBaseline(formData: FormData) {
@@ -62,6 +64,7 @@ export async function resetBaseline(formData: FormData) {
   );
 
   revalidatePath("/links");
+  redirect("/links");
 }
 
 export async function setLinkNotificationMode(formData: FormData) {
@@ -89,6 +92,7 @@ export async function setLinkNotificationMode(formData: FormData) {
   );
 
   revalidatePath("/links");
+  redirect("/links");
 }
 
 export async function clearLinkNotificationMode(formData: FormData) {
@@ -109,4 +113,5 @@ export async function clearLinkNotificationMode(formData: FormData) {
   );
 
   revalidatePath("/links");
+  redirect("/links");
 }
