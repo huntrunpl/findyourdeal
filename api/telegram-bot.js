@@ -819,8 +819,7 @@ async function handleAdminReset(msg, _user, argText) {
     UPDATE chat_notifications
     SET daily_count = 0,
         daily_count_date = CURRENT_DATE,
-        notify_from = NOW(),
-        updated_at = NOW()
+        notify_from = NOW()
     WHERE user_id = $1
     `,
     [Number(targetUser.id)]
@@ -829,8 +828,7 @@ async function handleAdminReset(msg, _user, argText) {
   const linkRes = await dbQuery(
     `
     UPDATE links
-    SET notify_from = NOW(),
-        updated_at = NOW()
+    SET notify_from = NOW()
     WHERE user_id = $1 AND active = TRUE
     `,
     [Number(targetUser.id)]
