@@ -578,12 +578,14 @@ async function handleHelp(msg) {
     "/cisza HH-HH – ustaw (np. /cisza 22-7)\n" +
     "/cisza_off – wyłącz\n\n" +
     "Historia:\n" +
-    "/najnowsze &lt;ID&gt; – najnowsze oferty z historii linku\n\n" +
+    "/najnowsze [ID] – najnowsze oferty (bez ID = globalnie)\n" +
+    "/najtańskie [ID] – najtańsze oferty (bez ID = globalnie)\n\n" +
     "Przykłady:\n" +
     "<code>/lista</code>\n" +
     "<code>/usun 18</code>\n" +
     "<code>/dodaj https://www.olx.pl/oferty/?q=iphone14 iPhone 14 OLX</code>\n" +
-    "<code>/najnowsze 18</code>";
+    "<code>/najnowsze 18</code>\n" +
+    "<code>/najtańskie</code>";
 
   await tgSend(chatId, text);
 }
@@ -1184,70 +1186,245 @@ async function handleQuietOff(msg) {
 }
 
 // ---------- /najnowsze ----------
+// /najnowsze - globalnie (wszystkie linki)
+// /najnowsze ID - dla konkretnego linku
 
 async function handleNajnowsze(msg, user, argText) {
   const chatId = String(msg.chat.id);
-  const linkId = Number(argText);
-
-  if (!Number.isFinite(linkId) || linkId <= 0) {
-    await tgSend(chatId, "Użycie: <code>/najnowsze ID</code>\nnp. <code>/najnowsze 18</code>");
-    return;
-  }
-
-  // link musi należeć do usera
-  const chk = await dbQuery(
-    `SELECT id, name, url, source FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
-    [linkId, user.id]
-  );
-
-  if (!chk.rowCount) {
-    await tgSend(chatId, `Nie widzę linku <b>${linkId}</b> na Twoim koncie. Sprawdź <code>/lista</code>.`);
-    return;
-  }
-
+  const linkId = argText ? Number(argText) : null;
   const perLimit = getPerLinkItemLimit(user);
 
-  const itemsQ = await dbQuery(
-    `
-    SELECT title, price, currency, url, first_seen_at
-    FROM link_items
-    WHERE link_id = $1
-    ORDER BY first_seen_at DESC, id DESC
-    LIMIT $2
-    `,
-    [linkId, perLimit]
-  );
+  // Wersja z ID - jedna konkretna linka
+  if (linkId && Number.isFinite(linkId) && linkId > 0) {
+    // link musi należeć do usera
+    const chk = await dbQuery(
+      `SELECT id, name, url, source, last_seen_at FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
+      [linkId, user.id]
+    );
 
-  const linkRow = chk.rows[0];
-  const header = `🧾 Najnowsze oferty\n<b>${escapeHtml(linkRow.name || ("ID " + linkRow.id))}</b> <i>(ID ${linkRow.id})</i>\n`;
+    if (!chk.rowCount) {
+      await tgSend(chatId, `Nie widzę linku <b>${linkId}</b> na Twoim koncie. Sprawdź <code>/lista</code>.`);
+      return;
+    }
 
-  if (!itemsQ.rowCount) {
-    await tgSend(chatId, header + "\nBrak zapisanej historii dla tego linku (jeszcze).");
+    const linkRow = chk.rows[0];
+    const baseline = linkRow.last_seen_at || new Date(0);
+
+    const itemsQ = await dbQuery(
+      `
+      SELECT title, price, currency, url, first_seen_at
+      FROM link_items
+      WHERE link_id = $1 AND first_seen_at > $2
+      ORDER BY first_seen_at DESC, id DESC
+      LIMIT $3
+      `,
+      [linkId, baseline, perLimit]
+    );
+
+    const header = `🧾 Najnowsze oferty\n<b>${escapeHtml(linkRow.name || ("ID " + linkRow.id))}</b> <i>(ID ${linkRow.id})</i>\n`;
+    
+    if (!itemsQ.rowCount) {
+      await tgSend(chatId, header + "\nBrak nowych ofert od ostatniego znacznika czasu.");
+      return;
+    }
+
+    let out = header + "\n";
+    let i = 1;
+    for (const it of itemsQ.rows) {
+      const title = escapeHtml(it.title || "(bez tytułu)");
+      const priceStr = it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
+      const line =
+        `${i}. <b>${title}</b>` +
+        (priceStr ? `\n💰 ${escapeHtml(priceStr)}` : "") +
+        (it.url ? `\n${escapeHtml(it.url)}` : "") +
+        "\n\n";
+
+      if ((out + line).length > 3800) {
+        out += "… (ucięto – limit długości wiadomości)\n";
+        break;
+      }
+      out += line;
+      i++;
+    }
+
+    await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
     return;
   }
 
-  // buduj wiadomość (limit długości Telegrama ~4096)
-  let out = header + "\n";
-  let i = 1;
-  for (const it of itemsQ.rows) {
-    const title = escapeHtml(it.title || "(bez tytułu)");
-    const priceStr =
-      it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
-    const line =
-      `${i}. <b>${title}</b>` +
-      (priceStr ? `\n💰 ${escapeHtml(priceStr)}` : "") +
-      (it.url ? `\n${escapeHtml(it.url)}` : "") +
-      "\n\n";
+  // Wersja globalnie - wszystkie linki użytkownika
+  const linksQ = await dbQuery(
+    `SELECT id, name, url, source, last_seen_at FROM links WHERE user_id = $1 AND active = true ORDER BY id`,
+    [user.id]
+  );
 
-    if ((out + line).length > 3800) {
-      out += "… (ucięto – limit długości wiadomości)\n";
-      break;
-    }
-    out += line;
-    i++;
+  if (!linksQ.rowCount) {
+    await tgSend(chatId, "Nie masz żadnych aktywnych linków.");
+    return;
   }
 
-  await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
+  let globalOut = "🧾 Najnowsze oferty (globalnie)\n\n";
+  let totalItems = 0;
+
+  for (const link of linksQ.rows) {
+    const baseline = link.last_seen_at || new Date(0);
+    const itemsQ = await dbQuery(
+      `
+      SELECT title, price, currency, url, first_seen_at
+      FROM link_items
+      WHERE link_id = $1 AND first_seen_at > $2
+      ORDER BY first_seen_at DESC, id DESC
+      LIMIT $3
+      `,
+      [link.id, baseline, 3] // limit 3 per link
+    );
+
+    if (itemsQ.rowCount) {
+      globalOut += `<b>${escapeHtml(link.name || ("ID " + link.id))}</b> (ID ${link.id})\n`;
+      let i = 1;
+      for (const it of itemsQ.rows) {
+        const title = escapeHtml(it.title || "(bez tytułu)");
+        const priceStr = it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
+        globalOut += `  ${i}. ${title}`;
+        if (priceStr) globalOut += ` – 💰 ${escapeHtml(priceStr)}`;
+        globalOut += "\n";
+        i++;
+        totalItems++;
+      }
+      globalOut += "\n";
+
+      if (globalOut.length > 3800) {
+        globalOut += "… (ucięto – limit długości wiadomości)\n";
+        break;
+      }
+    }
+  }
+
+  if (totalItems === 0) {
+    await tgSend(chatId, "🧾 Najnowsze oferty (globalnie)\n\nBrak nowych ofert od ostatnich znaczników czasu.");
+  } else {
+    await tgSend(chatId, globalOut.trim(), { disable_web_page_preview: true });
+  }
+}
+
+// ---------- /najtańskie ----------
+// /najtańskie - globalnie (wszystkie linki)
+// /najtańskie ID - dla konkretnego linku
+
+async function handleNajtańskie(msg, user, argText) {
+  const chatId = String(msg.chat.id);
+  const linkId = argText ? Number(argText) : null;
+  const perLimit = getPerLinkItemLimit(user);
+
+  // Wersja z ID - jedna konkretna linka
+  if (linkId && Number.isFinite(linkId) && linkId > 0) {
+    const chk = await dbQuery(
+      `SELECT id, name, url, source, last_seen_at FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
+      [linkId, user.id]
+    );
+
+    if (!chk.rowCount) {
+      await tgSend(chatId, `Nie widzę linku <b>${linkId}</b> na Twoim koncie. Sprawdź <code>/lista</code>.`);
+      return;
+    }
+
+    const linkRow = chk.rows[0];
+    const baseline = linkRow.last_seen_at || new Date(0);
+
+    const itemsQ = await dbQuery(
+      `
+      SELECT title, price, currency, url, first_seen_at
+      FROM link_items
+      WHERE link_id = $1 AND first_seen_at > $2 AND price IS NOT NULL
+      ORDER BY price ASC, id DESC
+      LIMIT $3
+      `,
+      [linkId, baseline, perLimit]
+    );
+
+    const header = `💰 Najtańsze oferty\n<b>${escapeHtml(linkRow.name || ("ID " + linkRow.id))}</b> <i>(ID ${linkRow.id})</i>\n`;
+    
+    if (!itemsQ.rowCount) {
+      await tgSend(chatId, header + "\nBrak ofert z ceną od ostatniego znacznika czasu.");
+      return;
+    }
+
+    let out = header + "\n";
+    let i = 1;
+    for (const it of itemsQ.rows) {
+      const title = escapeHtml(it.title || "(bez tytułu)");
+      const priceStr = it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
+      const line =
+        `${i}. <b>${title}</b>` +
+        (priceStr ? `\n💰 ${escapeHtml(priceStr)}` : "") +
+        (it.url ? `\n${escapeHtml(it.url)}` : "") +
+        "\n\n";
+
+      if ((out + line).length > 3800) {
+        out += "… (ucięto – limit długości wiadomości)\n";
+        break;
+      }
+      out += line;
+      i++;
+    }
+
+    await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
+    return;
+  }
+
+  // Wersja globalnie - wszystkie linki użytkownika
+  const linksQ = await dbQuery(
+    `SELECT id, name, url, source, last_seen_at FROM links WHERE user_id = $1 AND active = true ORDER BY id`,
+    [user.id]
+  );
+
+  if (!linksQ.rowCount) {
+    await tgSend(chatId, "Nie masz żadnych aktywnych linków.");
+    return;
+  }
+
+  let globalOut = "💰 Najtańsze oferty (globalnie)\n\n";
+  let totalItems = 0;
+
+  for (const link of linksQ.rows) {
+    const baseline = link.last_seen_at || new Date(0);
+    const itemsQ = await dbQuery(
+      `
+      SELECT title, price, currency, url, first_seen_at
+      FROM link_items
+      WHERE link_id = $1 AND first_seen_at > $2 AND price IS NOT NULL
+      ORDER BY price ASC, id DESC
+      LIMIT $3
+      `,
+      [link.id, baseline, 3] // limit 3 per link
+    );
+
+    if (itemsQ.rowCount) {
+      globalOut += `<b>${escapeHtml(link.name || ("ID " + link.id))}</b> (ID ${link.id})\n`;
+      let i = 1;
+      for (const it of itemsQ.rows) {
+        const title = escapeHtml(it.title || "(bez tytułu)");
+        const priceStr = it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
+        globalOut += `  ${i}. ${title}`;
+        if (priceStr) globalOut += ` – 💰 ${escapeHtml(priceStr)}`;
+        globalOut += "\n";
+        i++;
+        totalItems++;
+      }
+      globalOut += "\n";
+
+      if (globalOut.length > 3800) {
+        globalOut += "… (ucięto – limit długości wiadomości)\n";
+        break;
+      }
+    }
+  }
+
+  if (totalItems === 0) {
+    await tgSend(chatId, "💰 Najtańsze oferty (globalnie)\n\nBrak ofert z ceną od ostatnich znaczników czasu.");
+  } else {
+    await tgSend(chatId, globalOut.trim(), { disable_web_page_preview: true });
+  }
+}
 }
 
 // ---------- callback_query z przycisków (lnmode:ID:mode) ----------
@@ -1494,6 +1671,8 @@ if (perLink) {
     await handleLanguage(msg, user, argText);
   } else if (command.startsWith("/najnowsze")) {
     await handleNajnowsze(msg, user, argText);
+  } else if (command.startsWith("/najtańskie") || command.startsWith("/najtansze")) {
+    await handleNajtańskie(msg, user, argText);
   } else {
     await tgSend(chatId, "❓ Nieznana komenda. Użyj /help.");
   }
