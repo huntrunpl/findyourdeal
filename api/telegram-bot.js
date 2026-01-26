@@ -816,17 +816,17 @@ const LANG_NAMES = {
 
 // Confirmation templates per target language
 const LANG_CONFIRM = {
-  en: (name) => `✅ Language changed to: <b>${name}</b>`,
-  pl: (name) => `✅ Język zmieniony na: <b>${name}</b>`,
-  de: (name) => `✅ Sprache geändert zu: <b>${name}</b>`,
-  fr: (name) => `✅ Langue changée en : <b>${name}</b>`,
-  it: (name) => `✅ Lingua cambiata in: <b>${name}</b>`,
-  es: (name) => `✅ Idioma cambiado a: <b>${name}</b>`,
-  pt: (name) => `✅ Idioma alterado para: <b>${name}</b>`,
-  ru: (name) => `✅ Язык изменён на: <b>${name}</b>`,
-  cs: (name) => `✅ Jazyk změněn na: <b>${name}</b>`,
-  hu: (name) => `✅ Nyelv módosítva erre: <b>${name}</b>`,
-  sk: (name) => `✅ Jazyk zmenený na: <b>${name}</b>`
+  en: (name) => `✅ Language changed to: ${name}`,
+  pl: (name) => `✅ Język zmieniony na: ${name}`,
+  de: (name) => `✅ Sprache geändert zu: ${name}`,
+  fr: (name) => `✅ Langue changée en : ${name}`,
+  it: (name) => `✅ Lingua cambiata in: ${name}`,
+  es: (name) => `✅ Idioma cambiado a: ${name}`,
+  pt: (name) => `✅ Idioma alterado para: ${name}`,
+  ru: (name) => `✅ Язык изменён на: ${name}`,
+  cs: (name) => `✅ Jazyk změněn na: ${name}`,
+  hu: (name) => `✅ Nyelv módosítva erre: ${name}`,
+  sk: (name) => `✅ Jazyk zmenený na: ${name}`
 };
 
 const getLangConfirmTemplate = (lang) => LANG_CONFIRM[lang] || LANG_CONFIRM.en;
