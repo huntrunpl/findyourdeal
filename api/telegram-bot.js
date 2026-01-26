@@ -822,11 +822,33 @@ async function handleLanguage(msg, user) {
   if (!arg) {
     const currentLang = user.lang || "en";
     const langName = SUPPORTED_LANGS[currentLang] || "English";
-    // Build language list with each language on its own line (avoids Telegram line breaks)
-    const langList = LANG_CODES.map(code => `<code>${code}</code> (${SUPPORTED_LANGS[code]})`).join("\n");
+    // Build language list with flag + name (like in panel)
+    const langList = LANG_CODES.map(code => {
+      const name = SUPPORTED_LANGS[code];
+      const flag = name.match(/[\p{Emoji_Presentation}]/gu)?.[0] || "";
+      const langDisplayName = name.replace(/[\p{Emoji_Presentation}]/gu, "").trim();
+      return `${flag} ${langDisplayName}`;
+    }).join("\n");
+    
+    // Build inline keyboard with language buttons (2 columns, 6 rows = 12 buttons)
+    const buttons = [];
+    for (let i = 0; i < LANG_CODES.length; i += 2) {
+      const row = [];
+      row.push({ text: `${SUPPORTED_LANGS[LANG_CODES[i]]}`, callback_data: `setlang:${LANG_CODES[i]}` });
+      if (i + 1 < LANG_CODES.length) {
+        row.push({ text: `${SUPPORTED_LANGS[LANG_CODES[i + 1]]}`, callback_data: `setlang:${LANG_CODES[i + 1]}` });
+      }
+      buttons.push(row);
+    }
+    
     await tgSend(
       chatId,
-      `🌍 Obecny język: <b>${langName}</b>\n\nDostępne:\n${langList}\n\nUstaw: <code>/lang en</code> lub <code>/lang pl</code>, itp.`
+      `🌍 Obecny język: <b>${langName}</b>\n\nDostępne:\n${langList}`,
+      {
+        reply_markup: {
+          inline_keyboard: buttons
+        }
+      }
     );
     return;
   }
@@ -1010,6 +1032,33 @@ async function handleCallback(update) {
       res.mode === "batch" ? "zbiorczo" : res.mode === "off" ? "OFF" : "pojedynczo";
 
     await tgAnswerCb(cq.id, `Ustawiono: ${pretty}`);
+    return;
+  }
+
+  // setlang:<lang_code>
+  const langMatch = data.match(/^setlang:([a-z]{2})$/i);
+  if (langMatch) {
+    const langCode = langMatch[1].toLowerCase();
+    if (!SUPPORTED_LANGS[langCode]) {
+      await tgAnswerCb(cq.id, "❌ Nieznany język.", true);
+      return;
+    }
+
+    // Update user language
+    process.stderr.write(`[lang_debug] Updating user ${userId} lang from ${cq.from?.language_code || 'unknown'} to ${langCode} (via callback)\n`);
+    await dbQuery(
+      `UPDATE users
+       SET lang = $1,
+           language = $1,
+           language_code = $1,
+           updated_at = NOW()
+       WHERE id = $2`,
+      [langCode, userId]
+    );
+
+    const langName = SUPPORTED_LANGS[langCode];
+    const confirmTemplate = getLangConfirmTemplate(langCode);
+    await tgAnswerCb(cq.id, confirmTemplate(langName));
     return;
   }
 
