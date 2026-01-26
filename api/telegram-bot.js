@@ -822,12 +822,12 @@ async function handleLanguage(msg, user) {
   if (!arg) {
     const currentLang = user.lang || "en";
     const langName = SUPPORTED_LANGS[currentLang] || "English";
-    // Build language list with flag + name (like in panel)
+    // Build language list: just names (flags will be on buttons)
     const langList = LANG_CODES.map(code => {
-      const name = SUPPORTED_LANGS[code];
-      const flag = name.match(/[\p{Emoji_Presentation}]/gu)?.[0] || "";
-      const langDisplayName = name.replace(/[\p{Emoji_Presentation}]/gu, "").trim();
-      return `${flag} ${langDisplayName}`;
+      const nameWithFlag = SUPPORTED_LANGS[code];
+      // Remove flag emoji (everything after space and emoji)
+      const nameOnly = nameWithFlag.replace(/\s+[\p{Emoji_Presentation}]/gu, "").trim();
+      return nameOnly;
     }).join("\n");
     
     // Build inline keyboard with language buttons (2 columns, 6 rows = 12 buttons)
