@@ -784,6 +784,7 @@ async function setPerLinkMode(chatId, userId, linkId, mode) {
 // Ordered list of supported languages (for consistent display in /lang)
 const LANG_CODES = ["en", "pl", "de", "fr", "it", "es", "pt", "ru", "cs", "hu", "sk"];
 
+// Language names with flags (for buttons)
 const SUPPORTED_LANGS = {
   "en": "English 🇬🇧",
   "pl": "Polski 🇵🇱",
@@ -796,6 +797,21 @@ const SUPPORTED_LANGS = {
   "cs": "Čeština 🇨🇿",
   "hu": "Magyar 🇭🇺",
   "sk": "Slovenčina 🇸🇰"
+};
+
+// Language names without flags (for text display)
+const LANG_NAMES = {
+  "en": "English",
+  "pl": "Polski",
+  "de": "Deutsch",
+  "fr": "Français",
+  "it": "Italiano",
+  "es": "Español",
+  "pt": "Português",
+  "ru": "Русский",
+  "cs": "Čeština",
+  "hu": "Magyar",
+  "sk": "Slovenčina"
 };
 
 // Confirmation templates per target language
@@ -821,14 +837,9 @@ async function handleLanguage(msg, user) {
 
   if (!arg) {
     const currentLang = user.lang || "en";
-    const langName = SUPPORTED_LANGS[currentLang] || "English";
-    // Build language list: just names (flags will be on buttons)
-    const langList = LANG_CODES.map(code => {
-      const nameWithFlag = SUPPORTED_LANGS[code];
-      // Remove flag emoji (everything after space and emoji)
-      const nameOnly = nameWithFlag.replace(/\s+[\p{Emoji_Presentation}]/gu, "").trim();
-      return nameOnly;
-    }).join("\n");
+    const langName = SUPPORTED_LANGS[currentLang] || "English 🇬🇧";
+    // Build language list: just names (no flags, no codes)
+    const langList = LANG_CODES.map(code => LANG_NAMES[code]).join("\n");
     
     // Build inline keyboard with language buttons (2 columns, 6 rows = 12 buttons)
     const buttons = [];
@@ -876,7 +887,7 @@ async function handleLanguage(msg, user) {
   );
   process.stderr.write(`[lang_debug] Update completed for user ${user.id}\n`);
 
-  const langName = SUPPORTED_LANGS[normalized];
+  const langName = LANG_NAMES[normalized];
   const confirmTemplate = getLangConfirmTemplate(normalized);
   await tgSend(chatId, confirmTemplate(langName));
 }
@@ -1056,7 +1067,7 @@ async function handleCallback(update) {
       [langCode, userId]
     );
 
-    const langName = SUPPORTED_LANGS[langCode];
+    const langName = LANG_NAMES[langCode];
     const confirmTemplate = getLangConfirmTemplate(langCode);
     await tgAnswerCb(cq.id, confirmTemplate(langName));
     return;
