@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 dotenv.config();
+import crypto from "crypto";
 
 import fetch from "node-fetch";
 import pg from "pg";
@@ -59,6 +60,34 @@ const ADMIN_TELEGRAM_IDS = new Set(
 );
 
 // ---------- helpery ogólne ----------
+
+
+// ---------- panel login token ----------
+
+async function createPanelLoginToken(userId) {
+  const token = crypto.randomBytes(24).toString("base64url");
+  await pool.query(
+    `INSERT INTO panel_login_tokens (token, user_id, expires_at)
+     VALUES ($1, $2, now() + interval '10 minutes')`,
+    [token, userId]
+  );
+  return token;
+}
+
+async function handlePanel(msg, user) {
+  const chatId = String(msg.chat.id);
+
+  try {
+    const token = await createPanelLoginToken(user.id);
+    const minutes = Number(process.env.PANEL_TOKEN_MINUTES || "10") || 10;
+
+    const url = `https://panel.findyourdeal.app/api/auth/login?token=${encodeURIComponent(token)}`;
+    await tgSend(chatId, `Panel: ${url}\nToken ważny ${minutes} minut.`);
+  } catch (e) {
+    console.error("handlePanel error:", e);
+    await tgSend(chatId, "❌ Nie udało się wygenerować linku do panelu.");
+  }
+}
 
 async function dbQuery(sql, params = []) {
   const client = await pool.connect();
@@ -819,8 +848,7 @@ async function handleAdminReset(msg, _user, argText) {
     UPDATE chat_notifications
     SET daily_count = 0,
         daily_count_date = CURRENT_DATE,
-        notify_from = NOW(),
-        updated_at = NOW()
+        notify_from = NOW()
     WHERE user_id = $1
     `,
     [Number(targetUser.id)]
@@ -829,8 +857,7 @@ async function handleAdminReset(msg, _user, argText) {
   const linkRes = await dbQuery(
     `
     UPDATE links
-    SET notify_from = NOW(),
-        updated_at = NOW()
+    SET notify_from = NOW()
     WHERE user_id = $1 AND active = TRUE
     `,
     [Number(targetUser.id)]
@@ -1375,6 +1402,13 @@ await ensureUser(
   const [commandRaw, ...rest] = text.split(/\s+/);
   const command = commandRaw.toLowerCase().split("\@")[0];
   const argText = rest.join(" ").trim();
+
+
+  // komenda panel
+  if (command === "/panel") {
+    await handlePanel(msg, user);
+    return;
+  }
 
   // komendy admina
   if (command === "/admin_reset" || command === "/areset") {
