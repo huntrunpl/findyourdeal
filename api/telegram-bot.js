@@ -26,6 +26,7 @@ import {
   isPlanActive,
   buildLimitReachedMessage,
   getPerLinkItemLimit,
+  getExtraLinkPacks,
 } from "./plans.js";
 
 const { Pool } = pg;
@@ -174,26 +175,134 @@ async function fetchUpdates() {
 // ---------- pomocnik do budowy STATUS ----------
 
 const STATUS_I18N = (() => {
-  const base = {
-    title: "ℹ️ Status",
-    plan: (name, code, expStr) => `Plan: ${name || code || "-"} (${code || "-"}), expires: ${expStr}`,
-    linksEnabled: (enabled, limit) => `Active links: ${enabled}/${limit}`,
-    linksTotal: (total, limit) => `Total links in DB: ${total}/${limit}`,
-    chatLine: (enabled, mode, daily, limit) =>
-      `This chat: ${enabled ? "ON" : "OFF"}, mode: ${mode}, today: ${daily}/${limit}`,
-    quietOn: (from, to) => `Quiet hours: ON ${from}:00–${to}:00`,
-    quietOff: "Quiet hours: OFF",
-    perLinkHint: "Per-link mode: /single_ID /batch_ID /off_ID",
+  const pl = {
+    title: "ℹ️ Status bota",
+    plan: (name, expStr, addons) => {
+      const line = `Plan: ${name} (do ${expStr})`;
+      return addons > 0 ? `${line}\nDodatki (addon +10): ${addons}` : line;
+    },
+    linksEnabled: (enabled, limit) => `Aktywne wyszukiwania (włączone): ${enabled}/${limit}`,
+    linksTotal: (total, limit) => `Łącznie wyszukiwań (w bazie): ${total}/${limit}`,
+    dailyLimit: (limit) => `Limit dziennych powiadomień: ${limit}`,
+    chatLine: (enabled, mode, daily, limit) => {
+      const status = enabled ? "✅ Powiadomienia WŁĄCZONE" : "⛔ Powiadomienia WYŁĄCZONE";
+      const modeText = mode === "batch" ? "zbiorczo" : mode === "off" ? "wyłączone" : "pojedynczo";
+      const dailyText = `Dzisiejsze powiadomienia: ${daily}/${limit}`;
+      return `${status}\nTryb domyślny na tym czacie: ${modeText}\n${dailyText}`;
+    },
+    quietOn: (from, to) => `Cisza nocna: włączona (${from}:00–${to}:00)`,
+    quietOff: "Cisza nocna: wyłączona",
+    perLinkHint: "Komendy: /on /off /pojedyncze /zbiorcze\nPer link: /pojedyncze_ID /zbiorcze_ID /off_ID /on_ID",
+    noLinks: "Brak aktywnych wyszukiwań.",
+    linksHeader: "Lista wyszukiwań:",
+    unknown: "(błąd)"
+  };
+
+  const en = {
+    title: "ℹ️ Bot Status",
+    plan: (name, expStr, addons) => {
+      const line = `Plan: ${name} (until ${expStr})`;
+      return addons > 0 ? `${line}\nAddons (+10 links each): ${addons}` : line;
+    },
+    linksEnabled: (enabled, limit) => `Active searches (enabled): ${enabled}/${limit}`,
+    linksTotal: (total, limit) => `Total searches (in database): ${total}/${limit}`,
+    dailyLimit: (limit) => `Daily notification limit: ${limit}`,
+    chatLine: (enabled, mode, daily, limit) => {
+      const status = enabled ? "✅ Notifications ENABLED" : "⛔ Notifications DISABLED";
+      const modeText = mode === "batch" ? "batch" : mode === "off" ? "disabled" : "single";
+      const dailyText = `Today's notifications: ${daily}/${limit}`;
+      return `${status}\nDefault mode for this chat: ${modeText}\n${dailyText}`;
+    },
+    quietOn: (from, to) => `Quiet hours: enabled (${from}:00–${to}:00)`,
+    quietOff: "Quiet hours: disabled",
+    perLinkHint: "Commands: /on /off /single /batch\nPer link: /single_ID /batch_ID /off_ID /on_ID",
     noLinks: "No active searches.",
-    linksHeader: "Active searches:",
+    linksHeader: "Search list:",
     unknown: "(error)"
   };
 
-  const all = {};
-  ["en", "pl", "de", "fr", "it", "es", "pt", "ru", "cs", "hu", "uk"].forEach((k) => {
-    all[k] = base; // reuse EN text as fallback
-  });
-  return all;
+  const de = {
+    title: "ℹ️ Bot-Status",
+    plan: (name, expStr, addons) => {
+      const line = `Plan: ${name} (bis ${expStr})`;
+      return addons > 0 ? `${line}\nErweiterungen (+10 Links je): ${addons}` : line;
+    },
+    linksEnabled: (enabled, limit) => `Aktive Suchen (aktiviert): ${enabled}/${limit}`,
+    linksTotal: (total, limit) => `Suchen gesamt (in Datenbank): ${total}/${limit}`,
+    dailyLimit: (limit) => `Tägliches Benachrichtigungslimit: ${limit}`,
+    chatLine: (enabled, mode, daily, limit) => {
+      const status = enabled ? "✅ Benachrichtigungen AKTIVIERT" : "⛔ Benachrichtigungen DEAKTIVIERT";
+      const modeText = mode === "batch" ? "Batch" : mode === "off" ? "deaktiviert" : "einzeln";
+      const dailyText = `Heutige Benachrichtigungen: ${daily}/${limit}`;
+      return `${status}\nStandardmodus für diesen Chat: ${modeText}\n${dailyText}`;
+    },
+    quietOn: (from, to) => `Ruhestunden: aktiviert (${from}:00–${to}:00)`,
+    quietOff: "Ruhestunden: deaktiviert",
+    perLinkHint: "Befehle: /on /off /single /batch\nPro Link: /single_ID /batch_ID /off_ID /on_ID",
+    noLinks: "Keine aktiven Suchen.",
+    linksHeader: "Suchliste:",
+    unknown: "(Fehler)"
+  };
+
+  const fr = {
+    title: "ℹ️ Statut du bot",
+    plan: (name, expStr, addons) => {
+      const line = `Plan: ${name} (jusqu'au ${expStr})`;
+      return addons > 0 ? `${line}\nExtensions (+10 liens chacune): ${addons}` : line;
+    },
+    linksEnabled: (enabled, limit) => `Recherches actives (activées): ${enabled}/${limit}`,
+    linksTotal: (total, limit) => `Total des recherches (en base): ${total}/${limit}`,
+    dailyLimit: (limit) => `Limite quotidienne de notifications: ${limit}`,
+    chatLine: (enabled, mode, daily, limit) => {
+      const status = enabled ? "✅ Notifications ACTIVÉES" : "⛔ Notifications DÉSACTIVÉES";
+      const modeText = mode === "batch" ? "groupé" : mode === "off" ? "désactivé" : "unique";
+      const dailyText = `Notifications aujourd'hui: ${daily}/${limit}`;
+      return `${status}\nMode par défaut pour ce chat: ${modeText}\n${dailyText}`;
+    },
+    quietOn: (from, to) => `Heures silencieuses: activées (${from}:00–${to}:00)`,
+    quietOff: "Heures silencieuses: désactivées",
+    perLinkHint: "Commandes: /on /off /single /batch\nPar lien: /single_ID /batch_ID /off_ID /on_ID",
+    noLinks: "Aucune recherche active.",
+    linksHeader: "Liste des recherches:",
+    unknown: "(erreur)"
+  };
+
+  const es = {
+    title: "ℹ️ Estado del bot",
+    plan: (name, expStr, addons) => {
+      const line = `Plan: ${name} (hasta ${expStr})`;
+      return addons > 0 ? `${line}\nComplementos (+10 enlaces cada uno): ${addons}` : line;
+    },
+    linksEnabled: (enabled, limit) => `Búsquedas activas (habilitadas): ${enabled}/${limit}`,
+    linksTotal: (total, limit) => `Total de búsquedas (en base de datos): ${total}/${limit}`,
+    dailyLimit: (limit) => `Límite diario de notificaciones: ${limit}`,
+    chatLine: (enabled, mode, daily, limit) => {
+      const status = enabled ? "✅ Notificaciones HABILITADAS" : "⛔ Notificaciones DESHABILITADAS";
+      const modeText = mode === "batch" ? "agrupado" : mode === "off" ? "deshabilitado" : "único";
+      const dailyText = `Notificaciones hoy: ${daily}/${limit}`;
+      return `${status}\nModo predeterminado para este chat: ${modeText}\n${dailyText}`;
+    },
+    quietOn: (from, to) => `Horas de silencio: habilitadas (${from}:00–${to}:00)`,
+    quietOff: "Horas de silencio: deshabilitadas",
+    perLinkHint: "Comandos: /on /off /single /batch\nPor enlace: /single_ID /batch_ID /off_ID /on_ID",
+    noLinks: "No hay búsquedas activas.",
+    linksHeader: "Lista de búsquedas:",
+    unknown: "(error)"
+  };
+
+  return {
+    pl,
+    en,
+    de,
+    fr,
+    es,
+    it: en, // fallback to EN for remaining languages
+    pt: en,
+    ru: en,
+    cs: en,
+    hu: en,
+    uk: en
+  };
 })();
 
 function normalizeLangCode(lang) {
@@ -214,7 +323,8 @@ function formatDateYMD(dateVal) {
 
 async function buildStatusMessage(chatId, user) {
   const userId = user.id;
-  const lang = normalizeLangCode(user.lang || user.language_code || "en");
+  // Prefer language_code first because DB trigger restricts lang to pl/en
+  const lang = normalizeLangCode(user.language_code || user.lang || user.language || "en");
   const t = STATUS_I18N[lang] || STATUS_I18N.en;
 
   const linkLimit = Number(user.links_limit_total ?? getEffectiveLinkLimit(user) ?? 0) || 0;
@@ -222,21 +332,28 @@ async function buildStatusMessage(chatId, user) {
   const planCode = user.plan_code || user.plan_name || "-";
   const planName = user.plan_name || user.plan_code || "-";
   const planExp = formatDateYMD(user.plan_expires_at || user.expires_at);
+  
+  // Calculate addon packs (if platinum)
+  const extraPacks = planCode.toLowerCase() === "platinum" ? getExtraLinkPacks(user) : 0;
 
   // stderr is always unbuffered in Node.js, unlike stdout in non-TTY environments
   process.stderr.write(
-    `[status_debug] user_id=${userId} lang=${lang} plan_code=${planCode} link_limit=${linkLimit} daily_limit=${dailyLimit}\n`
+    `[status_debug] user_id=${userId} lang=${lang} plan_code=${planCode} link_limit=${linkLimit} daily_limit=${dailyLimit} lang_col=${user.lang} lang_code=${user.language_code}\n`
   );
 
   let text = `${t.title}\n\n`;
-  text += `${t.plan(planName, planCode, planExp)}\n`;
+  text += `${t.plan(planName, planExp, extraPacks)}\n\n`;
 
   // Link counters
   try {
     const totalLinks = await countActiveLinksForUserId(userId);
     const enabledLinks = await countEnabledLinksForUserId(userId);
     text += `${t.linksEnabled(enabledLinks, linkLimit)}\n`;
-    text += `${t.linksTotal(totalLinks, linkLimit)}\n\n`;
+    text += `${t.linksTotal(totalLinks, linkLimit)}\n`;
+    if (dailyLimit) {
+      text += `${t.dailyLimit(dailyLimit)}\n`;
+    }
+    text += `\n`;
   } catch (e) {
     console.error("buildStatusMessage: link counters error", e);
   }
@@ -678,6 +795,23 @@ const SUPPORTED_LANGS = {
   "uk": "Українська 🇺🇦"
 };
 
+// Confirmation templates per target language
+const LANG_CONFIRM = {
+  en: (name) => `✅ Language changed to: <b>${name}</b>`,
+  pl: (name) => `✅ Język zmieniony na: <b>${name}</b>`,
+  de: (name) => `✅ Sprache geändert zu: <b>${name}</b>`,
+  fr: (name) => `✅ Langue changée en : <b>${name}</b>`,
+  it: (name) => `✅ Lingua cambiata in: <b>${name}</b>`,
+  es: (name) => `✅ Idioma cambiado a: <b>${name}</b>`,
+  pt: (name) => `✅ Idioma alterado para: <b>${name}</b>`,
+  ru: (name) => `✅ Язык изменён на: <b>${name}</b>`,
+  cs: (name) => `✅ Jazyk změněn na: <b>${name}</b>`,
+  hu: (name) => `✅ Nyelv módosítva erre: <b>${name}</b>`,
+  uk: (name) => `✅ Мову змінено на: <b>${name}</b>`
+};
+
+const getLangConfirmTemplate = (lang) => LANG_CONFIRM[lang] || LANG_CONFIRM.en;
+
 async function handleLanguage(msg, user) {
   const chatId = String(msg.chat.id);
   const arg = (msg.text || "").trim().split(/\s+/).slice(1).join(" ").trim().toLowerCase();
@@ -702,14 +836,22 @@ async function handleLanguage(msg, user) {
     return;
   }
 
-  // Update users.lang
+  // Update users.lang AND language_code (trigger will sync)
+  process.stderr.write(`[lang_debug] Updating user ${user.id} lang from ${user.lang} to ${normalized}\n`);
   await dbQuery(
-    `UPDATE users SET lang = $1, updated_at = NOW() WHERE id = $2`,
+    `UPDATE users
+     SET lang = $1,
+         language = $1,
+         language_code = $1,
+         updated_at = NOW()
+     WHERE id = $2`,
     [normalized, user.id]
   );
+  process.stderr.write(`[lang_debug] Update completed for user ${user.id}\n`);
 
   const langName = SUPPORTED_LANGS[normalized];
-  await tgSend(chatId, `✅ Język zmieniony na: <b>${langName}</b>`);
+  const confirmTemplate = getLangConfirmTemplate(normalized);
+  await tgSend(chatId, confirmTemplate(langName));
 }
 
 // ---------- cisza nocna ----------
@@ -752,6 +894,8 @@ async function handleQuiet(msg) {
 async function handleQuietOff(msg) {
   const chatId = String(msg.chat.id);
   await disableQuietHours(chatId);
+  const confirmTemplate = getLangConfirmTemplate(normalized);
+  await tgSend(chatId, confirmTemplate(langName));
   await tgSend(chatId, "🌙 Cisza nocna: <b>WYŁĄCZONA</b>");
 }
 

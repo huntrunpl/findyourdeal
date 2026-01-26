@@ -210,7 +210,7 @@ export async function ensureUser(
       username = EXCLUDED.username,
       first_name = EXCLUDED.first_name,
       last_name = EXCLUDED.last_name,
-      language_code = EXCLUDED.language_code,
+      language_code = COALESCE(users.language_code, EXCLUDED.language_code),
       updated_at = NOW()
     RETURNING *;
     `,
