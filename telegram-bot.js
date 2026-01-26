@@ -734,15 +734,27 @@ async function handleNotificationsOn(msg, user) {
 
   await ensureChatNotificationsRow(chatId, user.id);
 
+  // reset notify_from (zaczynam zbierać oferty od teraz)
   await dbQuery(
     `
-    INSERT INTO chat_notifications (chat_id, user_id, enabled, mode, updated_at)
-    VALUES ($1, $2, TRUE, 'single', NOW())
+    INSERT INTO chat_notifications (chat_id, user_id, enabled, mode, updated_at, notify_from)
+    VALUES ($1, $2, TRUE, 'single', NOW(), NOW())
     ON CONFLICT (chat_id, user_id) DO UPDATE SET
       enabled = TRUE,
-      updated_at = NOW()
+      updated_at = NOW(),
+      notify_from = NOW()
     `,
     [chatId, user.id]
+  );
+
+  // reset notify_from dla wszystkich aktywnych linków tego użytkownika
+  await dbQuery(
+    `
+    UPDATE links
+    SET notify_from = NOW()
+    WHERE user_id = $1 AND active = TRUE
+    `,
+    [user.id]
   );
 
   await tgSend(chatId, t.notifOn);
@@ -1323,6 +1335,12 @@ if (perLink) {
     }
 
     await clearLinkNotificationMode(user.id, String(chatId), linkId);
+
+    // reset notify_from dla tego konkretnego linku (zaczynam zbierać oferty od teraz)
+    await dbQuery(
+      `UPDATE links SET notify_from = NOW() WHERE id = $1 AND user_id = $2`,
+      [Number(linkId), Number(user.id)]
+    );
 
     // odczytaj domyślny tryb czatu (żeby ładnie potwierdzić)
     const cn = await dbQuery(
