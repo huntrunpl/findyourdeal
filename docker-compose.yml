@@ -22,6 +22,11 @@ services:
       - .env.db
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "fyd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   api:
     build: .
@@ -34,6 +39,11 @@ services:
       - db
     ports:
       - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
 
   panel:
     build:
@@ -48,6 +58,11 @@ services:
       - db
     ports:
       - "3001:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
 
   worker:
     build:
@@ -69,6 +84,12 @@ services:
     depends_on:
       - db
       - api
+    healthcheck:
+      test: ["CMD", "ps", "aux"]
+      interval: 30s
+      timeout: 5s
+      retries: 2
+
   tg-bot:
     build:
       context: .
@@ -81,9 +102,14 @@ services:
       - .env
     depends_on:
       - db
-
     environment:
       - NODE_OPTIONS=--unhandled-rejections=warn
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "telegram-bot.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 2
+
 volumes:
   postgres_data:
   caddy_data:
