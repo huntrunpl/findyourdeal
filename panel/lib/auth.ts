@@ -54,6 +54,7 @@ export async function consumePanelLoginToken(token: string): Promise<number | nu
     await client.query(
       `DELETE FROM panel_login_tokens
        WHERE expires_at < NOW() - INTERVAL '5 minutes'
+       ORDER BY created_at ASC
        LIMIT 100`
     );
 
