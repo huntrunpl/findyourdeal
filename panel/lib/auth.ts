@@ -43,9 +43,18 @@ export async function consumePanelLoginToken(token: string): Promise<number | nu
       return null;
     }
 
+    // Usuń token (single-use enforcement - brak możliwości re-use)
     await client.query(
-      `UPDATE panel_login_tokens SET used_at = NOW()  /* FYD_PANEL_TOKEN_REUSE */ WHERE token=$1`,
+      `DELETE FROM panel_login_tokens WHERE token=$1`,
       [t]
+    );
+
+    // Cleanup: Usuń wygasłe tokeny (max 100) aby nie rosła baza
+    // Wygasłe tokeny usuń z 5-minutowym buforem (na wypadek retry logic)
+    await client.query(
+      `DELETE FROM panel_login_tokens
+       WHERE expires_at < NOW() - INTERVAL '5 minutes'
+       LIMIT 100`
     );
 
     await client.query("COMMIT");
@@ -64,6 +73,14 @@ export async function createPanelSession(
   userAgent: string | null
 ): Promise<{ id: string; expires_at: string }> {
   const expires = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000);
+
+  // Cleanup wygasłych sesji tego usera (max 50) aby nie gromadzić starych
+  await pool.query(
+    `DELETE FROM panel_sessions
+     WHERE user_id=$1 AND expires_at < NOW()
+     LIMIT 50`,
+    [userId]
+  );
 
   const q = await pool.query(
     `INSERT INTO panel_sessions (user_id, expires_at, ip, user_agent)

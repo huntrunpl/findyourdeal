@@ -1202,7 +1202,7 @@ async function sendTelegram(method, payload) {
       payload = { ...payload, caption: payload.caption.slice(0, 900) + "…" };
     }
   } catch {}
-/* __FYD_TG_LIMITS_V1__ END */
+  /* __FYD_TG_LIMITS_V1__ END */
 
   // TG: limit długości + unikaj albumów (ucięte miniatury)
   try {
@@ -1232,7 +1232,6 @@ async function sendTelegram(method, payload) {
     }
   } catch {}
 
-
   try {
     if (method === "sendMessage" && payload && typeof payload.text === "string") {
       payload.text = __fydFixOutgoingText(payload.text, payload);
@@ -1258,7 +1257,7 @@ async function sendTelegram(method, payload) {
 
   if (!TG) {
     console.error("sendTelegram: brak TELEGRAM_BOT_TOKEN – nie wysyłam");
-    return;
+    return false;
   }
 
   const url = `https://api.telegram.org/bot${TG}/${method}`;
@@ -1276,26 +1275,59 @@ async function sendTelegram(method, payload) {
       if (res.status === 429) {
         let retry = 30;
         try {
-          const data = JSON.parse(text);
-          if (data?.parameters?.retry_after) retry = Number(data.parameters.retry_after) || retry;
+          const data429 = JSON.parse(text);
+          if (data429?.parameters?.retry_after) retry = Number(data429.parameters.retry_after) || retry;
         } catch {}
         console.warn(`sendTelegram: 429 retry_after=${retry}s`);
+        
+        const untilMs = Date.now() + (retry * 1000);
+
+        // FYD: 429 soft stop (persist pause) — pause link by ID from message text (ID <num>)
+        try {
+          let linkId = 0;
+          const txt = (payload && typeof payload.text === "string") ? payload.text : "";
+          const mId2 = String(txt).match(/\bID\b\s*(?:<[^>]*>\s*)?(\d{1,9})/);
+          if (mId2) linkId = Number(mId2[1]) || 0;
+
+          if (Number.isFinite(linkId) && linkId > 0) {
+            await notifyPool.query(
+              `UPDATE links
+               SET notify_from = to_timestamp($1 / 1000.0),
+                   updated_at = NOW()
+               WHERE id = $2`,
+              [untilMs, linkId]
+            );
+            console.log(`[notify_debug_pause] 429 link_id=${linkId} until=${new Date(untilMs).toISOString()}`);
+          } else {
+            console.log(`[notify_debug_pause] 429 no_link_id chat=${payload && payload.chat_id ? payload.chat_id : ""} until=${new Date(untilMs).toISOString()}`);
+          }
+        } catch (e) {
+          console.log("[notify_debug_pause_err] 429 persist failed:", e?.message || e);
+        }
         await sleep(retry * 1000);
         continue;
       }
 
-      if (!res.ok) {
+      let data = null;
+      try { data = JSON.parse(text); } catch { data = null; }
+      const ok = !!(res.ok && data && data.ok === true);
+
+      console.log(`[tg_result] method=${method} status=${res.status} ok=${ok}`);
+
+      if (!ok) {
         console.error("sendTelegram: HTTP error", res.status, res.statusText, text);
       }
 
-      break;
+      return ok;
     } catch (err) {
       console.error("sendTelegram: exception", err);
       await sleep(2000);
-      break;
+      return false;
     }
   }
 }
+
+
 
 function formatLinkHeader(link) {
   const src = (link.source || detectSource(link.url) || "").toUpperCase();
@@ -1357,11 +1389,11 @@ function __fydBtnText(lang, key) {
 
 async function tgSendItem(chatId, link, item, userLang) {
   const src = (link.source || detectSource(link.url) || "").toLowerCase();
-
   const lang = __fydLangBaseBtn(userLang || "en");
 
   // twarde ujednolicenie Vinted itemów przed formatowaniem single
   if (src === "vinted") item = __fydEnsureVintedItemFields(item);
+
   /* __FYD_PHOTO_FALLBACK_V1__ */
   try {
     if (item && !item.photo) {
@@ -1374,8 +1406,10 @@ async function tgSendItem(chatId, link, item, userLang) {
   const __rawTitle =
     String(item?.title || item?.name || item?.itemTitle || "").trim() ||
     (src === "vinted" ? (__fydDeriveVintedTitleFromUrl(item?.url) || "") : "");
+
   const title = __fydCleanTitle(__rawTitle);
-let caption = `${header}\n\n<b>${escapeHtml(title || "")}</b>\n`;
+
+  let caption = `${header}\n\n<b>${escapeHtml(title || "")}</b>\n`;
 
   if (item.price != null) {
     const priceStr = `${item.price} ${item.currency || ""}`.trim();
@@ -1406,8 +1440,10 @@ let caption = `${header}\n\n<b>${escapeHtml(title || "")}</b>\n`;
     typeof photo === "string" &&
     /^https?:\/\//i.test(photo);
 
+  let ok = false;
+
   if (canSendPhoto) {
-    await sendTelegram("sendPhoto", {
+    ok = await sendTelegram("sendPhoto", {
       chat_id: chatId,
       photo,
       caption,
@@ -1415,7 +1451,7 @@ let caption = `${header}\n\n<b>${escapeHtml(title || "")}</b>\n`;
       reply_markup: replyMarkup,
     });
   } else {
-    await sendTelegram("sendMessage", {
+    ok = await sendTelegram("sendMessage", {
       chat_id: chatId,
       text: caption,
       parse_mode: "HTML",
@@ -1425,7 +1461,9 @@ let caption = `${header}\n\n<b>${escapeHtml(title || "")}</b>\n`;
   }
 
   await sleep(SLEEP_BETWEEN_ITEMS_MS);
+  return !!ok;
 }
+
 
 function __itemOrderKey(item) {
   if (!item) return 0;
@@ -1545,7 +1583,7 @@ function makeBatchKey(chatId, userId, linkId) {
 
 // ---- FYD_DAILYCOUNT_BUMP_V1 ----
 // Zlicza dzienne powiadomienia w public.chat_notifications (dla /status)
-async function __fydBumpChatDailyCount(db, chatId, userId, inc = 1) {
+async function __fydBumpChatDailyCount(db, chatId, userId, userTz, inc = 1) {
   const cid = String(chatId || "").trim();
   const uid = Number(userId);
   const step = Number(inc) || 1;
@@ -1559,18 +1597,27 @@ async function __fydBumpChatDailyCount(db, chatId, userId, inc = 1) {
       " date=" + new Date().toISOString()
     );
     await db.query(
+
       `
       UPDATE chat_notifications
       SET daily_count = CASE
-            WHEN daily_count_date IS NULL OR daily_count_date::date <> CURRENT_DATE
+            WHEN daily_count_date IS NULL
+              OR daily_count_date::date <> (NOW() AT TIME ZONE $4)::date
               THEN $1
             ELSE COALESCE(daily_count, 0) + $1
           END,
-          daily_count_date = CURRENT_DATE,
+          daily_count_date = (NOW() AT TIME ZONE $4)::date,
+          notify_from = CASE
+            WHEN daily_count_date IS NULL
+              OR daily_count_date::date <> (NOW() AT TIME ZONE $4)::date
+              THEN NOW()
+            ELSE notify_from
+          END,
           updated_at = NOW()
       WHERE chat_id = $2 AND user_id = $3
-      `,
-      [step, cid, uid]
+      `
+,
+      [step, cid, uid, String(userTz || 'Europe/Warsaw')]
     );
   } catch (e) {
     console.error("WARN: __fydBumpChatDailyCount failed:", e?.message || e);
@@ -1649,6 +1696,7 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
         COALESCE(NULLIF(u.timezone,''), 'Europe/Warsaw') AS tz,
         cn.daily_count,
         cn.daily_count_date,
+        (cn.daily_count_date AT TIME ZONE COALESCE(NULLIF(u.timezone,''),'Europe/Warsaw'))::date AS daily_count_date_tz,
         LOWER(COALESCE(lnm.mode, cn.mode)) AS effective_mode,
         lnm.mode AS link_mode,
         qh.quiet_enabled,
@@ -1689,65 +1737,6 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
     // 1) wyłączone + OFF
     chatRows = chatRows.filter((row) => row.enabled && row.mode !== "off");
     if (!chatRows.length) return;
-
-                // --- FYD: respect /dodaj + /on + panel-enable markers (notify_from) ---
-        try {
-          const beforeN = Array.isArray(items) ? items.length : 0;
-          console.log("[notify_from_debug] link_id=" + link.id + " beforeN=" + beforeN + " todayStr=" + todayStr);
-
-          if (Array.isArray(items) && items.length) {
-            const filtered = items.filter((it) => {
-              const raw =
-                it?.first_seen_at || it?.firstSeenAt ||
-                it?.listed_at || it?.listedAt ||
-                it?.created_at || it?.createdAt ||
-                it?.published_at || it?.publishedAt ||
-                null;
-
-              // brak timestampu -> nie blokujemy
-              if (!raw) return true;
-
-              let ts = 0;
-              if (typeof raw === "number") {
-                ts = raw > 10_000_000_000 ? raw : raw * 1000;
-              } else if (typeof raw === "string" && raw.trim()) {
-                const t = Date.parse(raw);
-                ts = Number.isFinite(t) ? t : 0;
-              }
-              if (!ts) return true;
-
-              // GLOBALNY RESET O PÓŁNOCY (Warszawa): tylko dzisiejszy dzień
-              let itemDayStr = null;
-              try {
-                itemDayStr = new Intl.DateTimeFormat("en-CA", {
-                  timeZone: "Europe/Warsaw",
-                  year: "numeric",
-                  month: "2-digit",
-                  day: "2-digit",
-                }).format(new Date(ts));
-              } catch {
-                itemDayStr = null;
-              }
-
-              // UWAGA: nie filtrujemy globalnie po 'todayStr', bo użytkownicy mogą mieć różne strefy.
-              // Filtr dzienny jest robiony per-user (per row) poniżej.
-
-              // UWAGA: notify_from (chat_notify_from / link_notify_from) NA RAZIE WYŁĄCZONY
-              // jeśli będziemy chcieli przywrócić, dokładamy tu warunek ts >= __startAt
-
-              return true;
-            });
-
-            const removed = beforeN - filtered.length;
-            console.log("[notify_from_debug] link_id=" + link.id + " afterN=" + filtered.length + " removed=" + removed + " todayStr=" + todayStr);
-
-            if (removed > 0) skippedExtra = (skippedExtra || 0) + removed;
-            items = filtered;
-          }
-        } catch (e) {
-          console.error("[notify_from] filter error:", e);
-        }
-
     if (!items || !items.length) return;
 
     for (const row of chatRows) {
@@ -1808,39 +1797,157 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
       }
 
       // 3) dzienny limit – na podstawie chat_notifications (realnie wysłane oferty z tego czatu)
+      // HARD RESET licznika + marker (notify_from) przy zmianie dnia w TZ usera
+      // 3) dzienny limit – na podstawie chat_notifications (realnie wysłane oferty z tego czatu)
       const maxDaily = await getDailyLimitForUserId(notifyPool, userId);
 
       let dailyCount = 0;
-      let dailyDateStr = null;
-      try {
-        const dc = Number(row.daily_count || 0);
-        const ddate = row.daily_count_date;
-        try {
-          if (ddate) {
-            const d = new Date(ddate);
-            if (Number.isFinite(d.getTime())) {
-              // YYYY-MM-DD – spójne z todayStr
-              dailyDateStr = d.toISOString().slice(0, 10);
-            } else {
-              dailyDateStr = String(ddate).slice(0, 10);
-            }
-          } else {
-            dailyDateStr = null;
-          }
-        } catch {
-          dailyDateStr = ddate ? String(ddate).slice(0, 10) : null;
-        }
-        // porównujemy datę z Warsaw (todayStr) z datą w chat_notifications
-        if (dailyDateStr === todayUserStr) {
-          if (Number.isFinite(dc) && dc >= 0) {
-            dailyCount = dc;
-          }
-        }
-      } catch (e) {
-        try {
-          console.error("[daily_count_fetch_err] user_id=" + userId, e?.message || e);
-        } catch {}
+      let dailyDateStr = row.daily_count_date ? String(row.daily_count_date).slice(0, 10) : null;
+
+      const dc = Number(row.daily_count || 0);
+      if (dailyDateStr === todayUserStr && Number.isFinite(dc) && dc >= 0) {
+        dailyCount = dc;
       }
+
+
+
+      if (dailyDateStr !== todayUserStr) {
+
+
+        dailyCount = 0;
+
+
+        dailyDateStr = todayUserStr;
+
+
+        try {
+
+
+          await notifyPool.query(
+
+
+            `
+
+
+            UPDATE chat_notifications
+
+
+            SET daily_count = 0,
+
+
+                daily_count_date = $3::date,
+
+
+                notify_from = NOW(),
+
+
+                updated_at = NOW()
+
+
+            WHERE chat_id = $1 AND user_id = $2
+
+
+            `,
+
+
+            [chatId, userId, todayUserStr]
+
+
+          );
+
+
+          row.chat_notify_from = new Date().toISOString();
+
+
+        } catch {}
+
+
+      }
+
+
+
+      // START MARKER: /dodaj + /on + północ (chat.notify_from) + aktywacja linku (link.notify_from)
+
+
+      const startAtMs = Math.max(
+
+
+        Date.parse(row.chat_notify_from || "") || 0,
+
+
+        Date.parse(row.link_notify_from || "") || 0
+
+
+      );
+
+
+
+      // filtruj elementy starsze niż start marker (nie wysyłamy backlogu)
+
+
+      if (startAtMs > 0 && Array.isArray(itemsForRow) && itemsForRow.length) {
+
+
+        const __before = itemsForRow.length;
+
+
+        itemsForRow = itemsForRow.filter((it) => {
+
+
+          const raw =
+
+
+            it?.first_seen_at || it?.firstSeenAt ||
+
+
+            it?.listed_at || it?.listedAt ||
+
+
+            it?.created_at || it?.createdAt ||
+
+
+            it?.published_at || it?.publishedAt ||
+
+
+            null;
+
+
+          if (!raw) return true;
+
+
+          let ts = 0;
+
+
+          if (typeof raw === "number") {
+
+
+            ts = raw > 10_000_000_000 ? raw : raw * 1000;
+
+
+          } else if (typeof raw === "string" && raw.trim()) {
+
+
+            const t = Date.parse(raw);
+
+
+            ts = Number.isFinite(t) ? t : 0;
+
+
+          }
+
+
+          if (!ts) return true;
+
+
+          return ts >= startAtMs;
+
+
+        });
+
+
+      }
+
+
 
       logDebug(`notify_debug_daily chat=${chatId} user=${userId} tz=${userTz} count=${dailyCount} date=${dailyDateStr} max=${maxDaily}`);
 
@@ -1862,16 +1969,21 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
 
         const slice = itemsForRow.slice(0, remaining);
         for (const item of slice) {
-          await tgSendItem(chatId, link, item, rowLang);
-          await __fydBumpChatDailyCount(notifyPool, chatId, userId, 1);
+          const __ok = await tgSendItem(chatId, link, item, rowLang);
+          if (__ok) await __fydBumpChatDailyCount(notifyPool, chatId, userId, userTz, 1);
           sentSomething = true;
           sentCount += 1;
         }
       } else {
         const key = makeBatchKey(chatId, userId, link.id);
-        const existing = batchBuffers.get(key) || { items: [], skippedExtra: 0 };
-
-        existing.items.push(...itemsForRow);
+        const existing = batchBuffers.get(key) || { items: [], skippedExtra: 0, dayStr: todayUserStr, startAtMs };
+        if (existing.dayStr !== todayUserStr || existing.startAtMs !== startAtMs) {
+          existing.items = [];
+          existing.skippedExtra = 0;
+          existing.dayStr = todayUserStr;
+          existing.startAtMs = startAtMs;
+        }
+existing.items.push(...itemsForRow);
         if (typeof skippedExtraForRow === "number" && skippedExtraForRow > 0) {
           existing.skippedExtra += skippedExtraForRow;
         }
@@ -1897,12 +2009,11 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
               // nadwyżka poza limitem – ignorujemy, nie nabijamy jej do licznika
               existing.skippedExtra = 0;
             }
-
-            const inc = existing.items.length + (existing.skippedExtra || 0);
+            const inc = existing.items.length;
 
             if (inc > 0) {
               const text = buildBatchMessage(link, existing.items, existing.skippedExtra);
-              await sendTelegram("sendMessage", {
+              const __okBatch = await sendTelegram("sendMessage", {
                 chat_id: chatId,
                 text,
                 parse_mode: "HTML",
@@ -1917,7 +2028,7 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
                   ],
                 },
               });
-              await __fydBumpChatDailyCount(notifyPool, chatId, userId, inc);
+              if (__okBatch) await __fydBumpChatDailyCount(notifyPool, chatId, userId, userTz, inc);
               batchBuffers.delete(key);
               sentSomething = true;
             } else {

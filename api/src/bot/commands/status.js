@@ -181,7 +181,7 @@ export function createHandleStatus(deps) {
       const rDaily = await dbQuery(
         `SELECT COALESCE(SUM(
                   CASE
-                    WHEN daily_count_date IS DISTINCT FROM (NOW() AT TIME ZONE $3)::date THEN 0
+                    WHEN daily_count_date IS DISTINCT FROM (NOW() AT TIME ZONE $2)::date THEN 0
                     ELSE COALESCE(daily_count,0)
                   END
                 ),0)::int AS c

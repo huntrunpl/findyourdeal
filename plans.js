@@ -1,6 +1,5 @@
 /**
- * Plany i limity (bez DB) – muszą zgadzać się z kodami planów z tabeli plans.code
- * U Ciebie: trial, basic, pro, platinum, none
+ * Plan helpers aligned with entitlement view.
  */
 
 const BASE_LINK_LIMITS = {
@@ -25,20 +24,27 @@ function getPlanName(userOrId) {
   if (!isUserObject(userOrId)) {
     return "platinum"; // dev/test
   }
-  const raw = userOrId.plan_name || "none";
+  const raw = userOrId.plan_name || userOrId.plan_code || "none";
   return String(raw).toLowerCase();
 }
 
 function getExtraLinkPacks(userOrId) {
   if (!isUserObject(userOrId)) return 0;
+  if (Number.isFinite(Number(userOrId.extra_links))) {
+    return Number(userOrId.extra_links) / 10; // entitlement addons are already aggregated
+  }
   return Number(userOrId.extra_link_packs || 0);
 }
 
 function getPlanExpiresAt(userOrId) {
   if (!isUserObject(userOrId)) return null;
-  const v = userOrId.plan_expires_at;
+  const v = userOrId.plan_expires_at || userOrId.expires_at;
   if (!v) return null;
-  try { return new Date(v); } catch { return null; }
+  try {
+    return new Date(v);
+  } catch {
+    return null;
+  }
 }
 
 function getTrialUsed(userOrId) {
@@ -54,12 +60,16 @@ function toTitleCase(str) {
 }
 
 export function getEffectiveLinkLimit(userOrId) {
+  // Prefer entitlement view value if present
+  if (isUserObject(userOrId) && Number.isFinite(Number(userOrId.links_limit_total))) {
+    return Number(userOrId.links_limit_total);
+  }
+
   const plan = getPlanName(userOrId);
   if (plan === "none") return 0;
 
   const base = BASE_LINK_LIMITS[plan] ?? 0;
 
-  // opcjonalne pakiety tylko dla platinum (zostawiamy, bo masz kolumnę extra_link_packs)
   if (plan === "platinum") {
     const packs = getExtraLinkPacks(userOrId);
     return base + packs * 10;
@@ -103,7 +113,7 @@ export function buildLimitReachedMessage(userOrId, currentActive, maxAllowed) {
     lines.push(`Aktualny limit: ${maxAllowed} linków łącznie (${prettyPlan}).`);
   }
 
-  lines.push(`Masz już: ${currentActive} wyszukiwań.`);
+  lines.push(`Masz już: ${currentActive} wyszukiwań łącznie.`);
   lines.push("");
   lines.push("Aby dodać nowe wyszukiwanie, usuń któreś z istniejących linków (/lista, /usun ID).");
   return lines.join("\n");
@@ -121,7 +131,7 @@ export function formatPlanStatus(userOrId) {
   if (plan === "none") {
     lines.push("Plan: brak aktywnego planu.");
   } else {
-    lines.push(`Plan: ${prettyPlan}.`);
+    lines.push(`Plan: ${prettyPlan} (${plan}).`);
     if (expires) {
       const iso = expires.toISOString();
       lines.push(`Plan ważny do: ${iso.slice(0, 10)}.`);

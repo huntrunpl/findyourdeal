@@ -22,9 +22,7 @@ import { clearLinkNotificationMode } from "./db.js";
 
 import {
   getEffectiveLinkLimit,
-  formatPlanStatus,
   isPlanActive,
-  buildLimitReachedMessage,
   getPerLinkItemLimit,
 } from "./plans.js";
 
@@ -53,8 +51,7 @@ const MAX_DAILY_NOTIFICATIONS = 200;
 
 async function dbQuery(sql, params = []) {
   const client = await pool.connect();
-  try {
-    return await client.query(sql, params);
+  // ---------- pomocnik do budowy STATUS ----------
   } finally {
     client.release();
   }
@@ -171,6 +168,7 @@ async function fetchUpdates() {
   return data.result;
 }
 
+`;
 // ---------- pomocnik do budowy STATUS ----------
 
 const STATUS_I18N = (() => {
@@ -223,9 +221,8 @@ async function buildStatusMessage(chatId, user) {
   const planName = user.plan_name || user.plan_code || "-";
   const planExp = formatDateYMD(user.plan_expires_at || user.expires_at);
 
-  // stderr is always unbuffered in Node.js, unlike stdout in non-TTY environments
-  process.stderr.write(
-    `[status_debug] user_id=${userId} lang=${lang} plan_code=${planCode} link_limit=${linkLimit} daily_limit=${dailyLimit}\n`
+  console.log(
+    `[status_debug] user_id=${userId} lang=${lang} plan_code=${planCode} link_limit=${linkLimit} daily_limit=${dailyLimit}`
   );
 
   let text = `${t.title}\n\n`;
@@ -1023,8 +1020,6 @@ if (perLink) {
 // ---------- main loop ----------
 
 async function main() {
-  // Log startup to verify stdout is connected to docker logs
-  process.stdout.write("[tg-bot] Starting telegram-bot service\n");
   console.log("telegram-bot.js start");
 
   await initDb();

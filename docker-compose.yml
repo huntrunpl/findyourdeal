@@ -83,7 +83,7 @@ services:
       - db
 
     environment:
-      - NODE_OPTIONS=--dns-result-order=ipv4first
+      - NODE_OPTIONS=--unhandled-rejections=warn
 volumes:
   postgres_data:
   caddy_data:
