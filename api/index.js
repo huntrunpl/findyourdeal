@@ -3,6 +3,8 @@ import {
   initDb,
   ensureUser,
   getUserWithPlanByTelegramId,
+  getUserEntitlementsByTelegramId,
+  countEnabledLinksForUserId
 } from "./db.js";
 import { registerStripeWebhookRoutes } from "./stripe-webhook.js";
 import Stripe from "stripe";
@@ -625,6 +627,7 @@ mode: "subscription",
 const { sendMessage: tgSend } = createTelegramClient();
 
 // =================== PANEL AUTH (DEV) ===================
+const requireUser = makeRequireUser({ ensureUser, getUserWithPlanByTelegramId, getUserEntitlementsByTelegramId });
 
 // =================== PANEL: /plans ===================
 app.get("/plans", async (req, res) => {
@@ -655,42 +658,42 @@ app.get("/plans", async (req, res) => {
 });
 
 // =================== PANEL: /me ===================
-// // app.get("/me", requireUser, async (req, res) => {
-// //   const user = req.user;
-// // 
-// //   const ent = req.entitlements;
-// //   const planRow = await getPlanRowByCode(ent?.plan_code || user.plan_name);
-// //   const features = await getPlanFeaturesByPlanId(planRow?.id);
-// // 
-// //   const totalLinks = await countAllLinksForUserId(user.id); // wszystkie linki (limit)
-// //   const enabledLinks = await countEnabledLinksForUserId(user.id); // tylko active=TRUE
-// // 
-// //   const maxTotalLinks = Number(ent?.links_limit_total ?? 0);
-// // 
-// //   res.json({
-// //     id: user.id,
-// //     telegram_user_id: user.telegram_user_id,
-// //     username: user.username,
-// //     first_name: user.first_name,
-// //     last_name: user.last_name,
-// //     language_code: user.language_code,
-// // 
-// //     plan: planRow ? { id: planRow.id, code: planRow.code, name: planRow.name } : { code: "none" },
-// //     plan_expires_at: ent?.expires_at ?? null,
-// //     extra_link_packs: user.extra_link_packs,
-//     trial_used: user.trial_used,
-// 
-//     features,
-//     limits: {
-//       total_links: totalLinks,
-//       max_total_links: maxTotalLinks,
-//       active_links: enabledLinks,
-//       max_active_links: maxTotalLinks
-//     },
-// 
-//     status_text: formatEntitlementsStatus(ent)
-//   });
-// });
+app.get("/me", requireUser, async (req, res) => {
+  const user = req.user;
+
+  const ent = req.entitlements;
+  const planRow = await getPlanRowByCode(ent?.plan_code || user.plan_name);
+  const features = await getPlanFeaturesByPlanId(planRow?.id);
+
+  const totalLinks = await countAllLinksForUserId(user.id); // wszystkie linki (limit)
+  const enabledLinks = await countEnabledLinksForUserId(user.id); // tylko active=TRUE
+
+  const maxTotalLinks = Number(ent?.links_limit_total ?? 0);
+
+  res.json({
+    id: user.id,
+    telegram_user_id: user.telegram_user_id,
+    username: user.username,
+    first_name: user.first_name,
+    last_name: user.last_name,
+    language_code: user.language_code,
+
+    plan: planRow ? { id: planRow.id, code: planRow.code, name: planRow.name } : { code: "none" },
+    plan_expires_at: ent?.expires_at ?? null,
+    extra_link_packs: user.extra_link_packs,
+    trial_used: user.trial_used,
+
+    features,
+    limits: {
+      total_links: totalLinks,
+      max_total_links: maxTotalLinks,
+      active_links: enabledLinks,
+      max_active_links: maxTotalLinks
+    },
+
+    status_text: formatEntitlementsStatus(ent)
+  });
+});
 
 // =================== PANEL: /links ===================
 app.get("/links", requireUser, async (req, res) => {
@@ -889,7 +892,7 @@ app.post("/telegram-webhook", async (req, res) => {
         return;
       }
 
-
+      const ent = await getUserEntitlementsByTelegramId(from.id);
       const enabledLinks = await countEnabledLinksForUserId(user.id);
       const limit = Number(ent?.links_limit_total ?? 0);
 

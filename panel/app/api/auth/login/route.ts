@@ -28,13 +28,20 @@ export async function GET(req: NextRequest) {
   const origin = getOrigin(req);
 
   const token = (req.nextUrl.searchParams.get("token") || "").trim();
+  console.log("[auth/login] GET token:", token ? token.substring(0, 10) + "..." : "EMPTY");
+  console.log("[auth/login] GET token:", token ? token.substring(0, 10) + "..." : "EMPTY");
   if (!token) {
+    console.log("[auth/login] NO TOKEN PROVIDED");
+    console.log("[auth/login] NO TOKEN PROVIDED");
     return NextResponse.redirect(new URL("/login?invalid=1", origin));
   }
 
   try {
+    console.log("[auth/login] consumePanelLoginToken starting for token:", token.substring(0, 10) + "...");
     const userId = await consumePanelLoginToken(token);
+    console.log("[auth/login] consumePanelLoginToken returned userId:", userId);
     if (!userId) {
+      console.log("[auth/login] userId is null/falsy");
       return NextResponse.redirect(new URL("/login?invalid=1", origin));
     }
 
@@ -54,7 +61,9 @@ export async function GET(req: NextRequest) {
 
     return res;
   } catch (e) {
-    console.error("api/auth/login error", e);
-    return NextResponse.redirect(new URL("/login?error=1", origin));
+    const errMsg = e instanceof Error ? e.message : String(e);
+    console.error("[auth/login] ERROR:", errMsg);
+    console.error("[auth/login] STACK:", e instanceof Error ? e.stack : "no stack");
+    return NextResponse.redirect(new URL(`/login?error=1&reason=${encodeURIComponent(errMsg)}`, origin));
   }
 }

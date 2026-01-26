@@ -265,6 +265,37 @@ export async function getUserWithPlanByTelegramId(tgId) {
   return q.rows[0] || null;
 }
 
+export async function getUserEntitlementsByTelegramId(tgId) {
+  const tgNum = Number(tgId);
+  if (!Number.isFinite(tgNum)) return null;
+
+  // Zwraca uprawnienia z user_entitlements_v dla danego telegram_user_id
+  const q = await pool.query(
+    `SELECT
+      user_id,
+      telegram_user_id,
+      plan_code,
+      expires_at,
+      base_links_limit,
+      extra_links,
+      links_limit_total,
+      fast_slots,
+      refresh_normal_s,
+      refresh_fast_s,
+      group_chat_allowed,
+      plan_name,
+      history_limit_total,
+      daily_notifications_limit
+    FROM user_entitlements_v
+    WHERE telegram_user_id = $1
+    LIMIT 1
+    `,
+    [tgNum]
+  );
+
+  return q.rows[0] || null;
+}
+
 export async function setUserTelegramChatId(userId, chatId) {
   const uid = Number(userId);
   const cid = Number(chatId);
