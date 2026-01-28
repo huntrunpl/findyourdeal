@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 dotenv.config();
+import crypto from "crypto";
 
 import fetch from "node-fetch";
 import pg from "pg";
@@ -9,7 +10,6 @@ import {
   ensureUser,
   getUserWithPlanByTelegramId,
   getUserById,
-  getUserIdByTelegramId,
   getLinksByUserId,
   countActiveLinksForUserId,
   countEnabledLinksForUserId,
@@ -34,7 +34,6 @@ const { Pool } = pg;
 
 const TG = process.env.TELEGRAM_BOT_TOKEN || "";
 const DATABASE_URL = process.env.DATABASE_URL || "";
-const ADMIN_TG_ID = process.env.ADMIN_TG_ID ? String(process.env.ADMIN_TG_ID) : null;
 
 if (!TG) {
   console.error("Brak TELEGRAM_BOT_TOKEN w env, wychodzę.");
@@ -52,7 +51,43 @@ const pool = new Pool({
 // limit dzienny powiadomień na jeden chat – informacyjnie do /status
 const MAX_DAILY_NOTIFICATIONS = 200;
 
+// admini uprawnieni do komend typu /admin_reset
+const ADMIN_TELEGRAM_IDS = new Set(
+  String(process.env.ADMIN_TELEGRAM_IDS || "")
+    .split(/[\s,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
+
 // ---------- helpery ogólne ----------
+
+
+// ---------- panel login token ----------
+
+async function createPanelLoginToken(userId) {
+  const token = crypto.randomBytes(24).toString("base64url");
+  await pool.query(
+    `INSERT INTO panel_login_tokens (token, user_id, expires_at)
+     VALUES ($1, $2, now() + interval '10 minutes')`,
+    [token, userId]
+  );
+  return token;
+}
+
+async function handlePanel(msg, user) {
+  const chatId = String(msg.chat.id);
+
+  try {
+    const token = await createPanelLoginToken(user.id);
+    const minutes = Number(process.env.PANEL_TOKEN_MINUTES || "10") || 10;
+
+    const url = `https://panel.findyourdeal.app/api/auth/login?token=${encodeURIComponent(token)}`;
+    await tgSend(chatId, `Panel: ${url}\nToken ważny ${minutes} minut.`);
+  } catch (e) {
+    console.error("handlePanel error:", e);
+    await tgSend(chatId, "❌ Nie udało się wygenerować linku do panelu.");
+  }
+}
 
 async function dbQuery(sql, params = []) {
   const client = await pool.connect();
@@ -71,19 +106,8 @@ function escapeHtml(str = "") {
     .replace(/>/g, "&gt;");
 }
 
-function getTodayStart() {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-}
-
-function formatDateTime(val) {
-  if (!val) return "n/a";
-  try {
-    const d = val instanceof Date ? val : new Date(val);
-    return d.toISOString().replace("T", " ").slice(0, 19);
-  } catch {
-    return "n/a";
-  }
+function isAdmin(tgId) {
+  return ADMIN_TELEGRAM_IDS.has(String(tgId || ""));
 }
 
 async function tgApi(method, payload) {
@@ -169,32 +193,6 @@ async function ensureChatNotificationsRow(chatId, userId) {
     `,
     [String(chatId), Number(userId)]
   );
-}
-
-async function fetchChatNotifyFrom(chatId, userId) {
-  try {
-    const res = await dbQuery(
-      `SELECT notify_from FROM chat_notifications WHERE chat_id = $1 AND user_id = $2 LIMIT 1`,
-      [String(chatId), Number(userId)]
-    );
-    const raw = res.rows[0]?.notify_from;
-    return raw ? new Date(raw) : new Date(0);
-  } catch {
-    return new Date(0);
-  }
-}
-
-async function fetchLinkNotifyFrom(linkId, userId) {
-  try {
-    const res = await dbQuery(
-      `SELECT notify_from FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
-      [Number(linkId), Number(userId)]
-    );
-    const raw = res.rows[0]?.notify_from;
-    return raw ? new Date(raw) : new Date(0);
-  } catch {
-    return new Date(0);
-  }
 }
 
 // ---------- long polling z getUpdates ----------
@@ -410,7 +408,6 @@ async function buildStatusMessage(chatId, user) {
   // Prefer language_code first because DB trigger restricts lang to pl/en
   const lang = normalizeLangCode(user.language_code || user.lang || user.language || "en");
   const t = STATUS_I18N[lang] || STATUS_I18N.en;
-  const todayStr = new Date().toISOString().slice(0, 10);
 
   const linkLimit = Number(user.links_limit_total ?? getEffectiveLinkLimit(user) ?? 0) || 0;
   const dailyLimit = Number(user.daily_notifications_limit ?? MAX_DAILY_NOTIFICATIONS) || MAX_DAILY_NOTIFICATIONS;
@@ -468,25 +465,14 @@ async function buildStatusMessage(chatId, user) {
       const mode = (row.mode || "single").toLowerCase();
       chatDefaultMode = mode;
 
-      let daily = 0;
-      try {
-        const dr = await dbQuery(
-          `SELECT COUNT(*)::int AS cnt FROM sent_offers WHERE chat_id = $1 AND user_id = $2 AND sent_at >= $3`,
-          [String(chatId), userId, getTodayStart()]
-        );
-        daily = dr.rows[0]?.cnt ?? 0;
-      } catch (e) {
-        console.error("buildStatusMessage: sent_offers daily error", e);
-        let fallback = row.daily_count || 0;
-        let dateStr = null;
-        if (row.daily_count_date) {
-          dateStr = row.daily_count_date.toISOString
-            ? row.daily_count_date.toISOString().slice(0, 10)
-            : String(row.daily_count_date).slice(0, 10);
-        }
-        if (dateStr !== todayStr) fallback = 0;
-        daily = fallback;
+      let daily = row.daily_count || 0;
+      let dateStr = null;
+      if (row.daily_count_date) {
+        dateStr = row.daily_count_date.toISOString
+          ? row.daily_count_date.toISOString().slice(0, 10)
+          : String(row.daily_count_date).slice(0, 10);
       }
+      if (dateStr !== todayStr) daily = 0;
 
       const modeLabel = mode === "batch" ? "batch" : mode === "off" ? "off" : "single";
       text += `${t.chatLine(enabled, modeLabel, daily, dailyLimit)}\n\n`;
@@ -591,16 +577,13 @@ async function handleHelp(msg) {
     "/cisza – pokaż\n" +
     "/cisza HH-HH – ustaw (np. /cisza 22-7)\n" +
     "/cisza_off – wyłącz\n\n" +
-    "Historia wysłanych:\n" +
-    "/najnowsze – najnowsze wysłane na tym czacie\n" +
-    "/najnowsze &lt;ID&gt; – najnowsze wysłane dla linku\n" +
-    "/najtansze – najtańsze wysłane na tym czacie\n" +
-    "/najtansze &lt;ID&gt; – najtańsze wysłane dla linku\n\n" +
+    "Historia:\n" +
+    "/najnowsze &lt;ID&gt; – najnowsze oferty z historii linku\n\n" +
     "Przykłady:\n" +
     "<code>/lista</code>\n" +
     "<code>/usun 18</code>\n" +
     "<code>/dodaj https://www.olx.pl/oferty/?q=iphone14 iPhone 14 OLX</code>\n" +
-    "<code>/najnowsze</code>";
+    "<code>/najnowsze 18</code>";
 
   await tgSend(chatId, text);
 }
@@ -792,15 +775,27 @@ async function handleNotificationsOn(msg, user) {
 
   await ensureChatNotificationsRow(chatId, user.id);
 
+  // reset notify_from (zaczynam zbierać oferty od teraz)
   await dbQuery(
     `
-    INSERT INTO chat_notifications (chat_id, user_id, enabled, mode, updated_at)
-    VALUES ($1, $2, TRUE, 'single', NOW())
+    INSERT INTO chat_notifications (chat_id, user_id, enabled, mode, updated_at, notify_from)
+    VALUES ($1, $2, TRUE, 'single', NOW(), NOW())
     ON CONFLICT (chat_id, user_id) DO UPDATE SET
       enabled = TRUE,
-      updated_at = NOW()
+      updated_at = NOW(),
+      notify_from = NOW()
     `,
     [chatId, user.id]
+  );
+
+  // reset notify_from dla wszystkich aktywnych linków tego użytkownika
+  await dbQuery(
+    `
+    UPDATE links
+    SET notify_from = NOW()
+    WHERE user_id = $1 AND active = TRUE
+    `,
+    [user.id]
   );
 
   await tgSend(chatId, t.notifOn);
@@ -825,6 +820,54 @@ async function handleNotificationsOff(msg, user) {
   );
 
   await tgSend(chatId, t.notifOff);
+}
+
+// ---------- /admin_reset /areset ----------
+
+async function handleAdminReset(msg, _user, argText) {
+  const callerTgId = msg?.from?.id;
+  if (!isAdmin(callerTgId)) {
+    await tgSend(msg.chat.id, "❌ Unauthorized (admin only).");
+    return;
+  }
+
+  const targetTgId = String(argText || "").trim();
+  if (!targetTgId) {
+    await tgSend(msg.chat.id, "❌ Podaj Telegram ID: /admin_reset <telegram_id>");
+    return;
+  }
+
+  const targetUser = await getUserWithPlanByTelegramId(targetTgId);
+  if (!targetUser) {
+    await tgSend(msg.chat.id, `❌ User not found for Telegram ID ${escapeHtml(targetTgId)}`);
+    return;
+  }
+
+  const chatRes = await dbQuery(
+    `
+    UPDATE chat_notifications
+    SET daily_count = 0,
+        daily_count_date = CURRENT_DATE,
+        notify_from = NOW()
+    WHERE user_id = $1
+    `,
+    [Number(targetUser.id)]
+  );
+
+  const linkRes = await dbQuery(
+    `
+    UPDATE links
+    SET notify_from = NOW()
+    WHERE user_id = $1 AND active = TRUE
+    `,
+    [Number(targetUser.id)]
+  );
+
+  const nowIso = new Date().toISOString();
+  await tgSend(
+    msg.chat.id,
+    `✅ Admin reset done for TG ${escapeHtml(targetTgId)}. Chats updated: ${chatRes.rowCount}. Active links reset: ${linkRes.rowCount}. Since=${nowIso}`
+  );
 }
 
 // ---------- /pojedyncze /zbiorcze (domyślny tryb czatu) ----------
@@ -1140,250 +1183,71 @@ async function handleQuietOff(msg) {
   await tgSend(chatId, t.quietOff);
 }
 
-// ---------- /najnowsze /najtansze (wysłane do Telegrama) ----------
+// ---------- /najnowsze ----------
 
 async function handleNajnowsze(msg, user, argText) {
   const chatId = String(msg.chat.id);
   const linkId = Number(argText);
-  const sinceChat = await fetchChatNotifyFrom(chatId, user.id);
 
-  if (Number.isFinite(linkId) && linkId > 0) {
-    const linkQ = await dbQuery(
-      `SELECT id, name, url, notify_from FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
-      [linkId, user.id]
-    );
-
-    if (!linkQ.rowCount) {
-      await tgSend(chatId, `Nie widzę linku <b>${linkId}</b> na Twoim koncie. Sprawdź <code>/lista</code>.`);
-      return;
-    }
-
-    const linkRow = linkQ.rows[0];
-    const since = new Date(
-      Math.max(new Date(linkRow.notify_from || 0).getTime(), sinceChat.getTime())
-    );
-
-    const itemsQ = await dbQuery(
-      `
-      SELECT title, price, currency, url, sent_at
-      FROM sent_offers
-      WHERE user_id = $1 AND chat_id = $2 AND link_id = $3 AND sent_at >= $4
-      ORDER BY sent_at DESC
-      LIMIT 10
-      `,
-      [user.id, chatId, linkId, since]
-    );
-
-    if (!itemsQ.rowCount) {
-      await tgSend(
-        chatId,
-        `Brak wysłanych ofert dla linku <b>${linkId}</b> od ${formatDateTime(since)}.`
-      );
-      return;
-    }
-
-    let out = `🧾 Najnowsze wysłane (link ${linkRow.id})\n${escapeHtml(
-      linkRow.name || "(bez nazwy)"
-    )}\nOd: ${formatDateTime(since)}\n\n`;
-
-    itemsQ.rows.forEach((it, idx) => {
-      const title = escapeHtml(it.title || "(bez tytułu)");
-      const priceStr =
-        it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
-
-      out += `${idx + 1}. <b>${title}</b>\n`;
-      if (priceStr) out += `💰 ${escapeHtml(priceStr)}\n`;
-      if (it.url) out += `${escapeHtml(it.url)}\n`;
-      out += `📅 ${formatDateTime(it.sent_at)}\n\n`;
-    });
-
-    await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
+  if (!Number.isFinite(linkId) || linkId <= 0) {
+    await tgSend(chatId, "Użycie: <code>/najnowsze ID</code>\nnp. <code>/najnowsze 18</code>");
     return;
   }
 
-  const globalQ = await dbQuery(
-    `
-    SELECT so.link_id, so.title, so.price, so.currency, so.url, so.sent_at, l.name AS link_name
-    FROM sent_offers so
-    JOIN links l ON l.id = so.link_id
-    WHERE so.user_id = $1 AND so.chat_id = $2 AND so.sent_at >= $3
-    ORDER BY so.sent_at DESC
-    LIMIT 10
-    `,
-    [user.id, chatId, sinceChat]
+  // link musi należeć do usera
+  const chk = await dbQuery(
+    `SELECT id, name, url, source FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
+    [linkId, user.id]
   );
 
-  if (!globalQ.rowCount) {
-    await tgSend(chatId, `Brak wysłanych ofert od ${formatDateTime(sinceChat)}.`);
+  if (!chk.rowCount) {
+    await tgSend(chatId, `Nie widzę linku <b>${linkId}</b> na Twoim koncie. Sprawdź <code>/lista</code>.`);
     return;
   }
 
-  let out = `🧾 Najnowsze wysłane (od ${formatDateTime(sinceChat)})\n\n`;
-  const linkHints = new Set();
+  const perLimit = getPerLinkItemLimit(user);
 
-  globalQ.rows.forEach((row, idx) => {
+  const itemsQ = await dbQuery(
+    `
+    SELECT title, price, currency, url, first_seen_at
+    FROM link_items
+    WHERE link_id = $1
+    ORDER BY first_seen_at DESC, id DESC
+    LIMIT $2
+    `,
+    [linkId, perLimit]
+  );
+
+  const linkRow = chk.rows[0];
+  const header = `🧾 Najnowsze oferty\n<b>${escapeHtml(linkRow.name || ("ID " + linkRow.id))}</b> <i>(ID ${linkRow.id})</i>\n`;
+
+  if (!itemsQ.rowCount) {
+    await tgSend(chatId, header + "\nBrak zapisanej historii dla tego linku (jeszcze).");
+    return;
+  }
+
+  // buduj wiadomość (limit długości Telegrama ~4096)
+  let out = header + "\n";
+  let i = 1;
+  for (const it of itemsQ.rows) {
+    const title = escapeHtml(it.title || "(bez tytułu)");
     const priceStr =
-      row.price != null ? `${row.price} ${row.currency || ""}`.trim() : "";
-    out += `${idx + 1}. [${row.link_id}] ${escapeHtml(row.link_name || "(bez nazwy)")}\n`;
-    out += `<b>${escapeHtml(row.title || "(bez tytułu)")}</b>\n`;
-    if (priceStr) out += `💰 ${escapeHtml(priceStr)}\n`;
-    if (row.url) out += `${escapeHtml(row.url)}\n`;
-    out += `📅 ${formatDateTime(row.sent_at)}\n\n`;
-    linkHints.add(row.link_id);
-  });
+      it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
+    const line =
+      `${i}. <b>${title}</b>` +
+      (priceStr ? `\n💰 ${escapeHtml(priceStr)}` : "") +
+      (it.url ? `\n${escapeHtml(it.url)}` : "") +
+      "\n\n";
 
-  if (linkHints.size) {
-    out += `Pełna historia: ${[...linkHints]
-      .map((id) => `/najnowsze ${id}`)
-      .join(" ")}`;
+    if ((out + line).length > 3800) {
+      out += "… (ucięto – limit długości wiadomości)\n";
+      break;
+    }
+    out += line;
+    i++;
   }
 
   await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
-}
-
-async function handleNajtansze(msg, user, argText) {
-  const chatId = String(msg.chat.id);
-  const linkId = Number(argText);
-  const sinceChat = await fetchChatNotifyFrom(chatId, user.id);
-
-  if (Number.isFinite(linkId) && linkId > 0) {
-    const linkQ = await dbQuery(
-      `SELECT id, name, url, notify_from FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
-      [linkId, user.id]
-    );
-
-    if (!linkQ.rowCount) {
-      await tgSend(chatId, `Nie widzę linku <b>${linkId}</b> na Twoim koncie. Sprawdź <code>/lista</code>.`);
-      return;
-    }
-
-    const linkRow = linkQ.rows[0];
-    const since = new Date(
-      Math.max(new Date(linkRow.notify_from || 0).getTime(), sinceChat.getTime())
-    );
-
-    const itemsQ = await dbQuery(
-      `
-      SELECT title, price, currency, url, sent_at
-      FROM sent_offers
-      WHERE user_id = $1 AND chat_id = $2 AND link_id = $3 AND sent_at >= $4 AND price IS NOT NULL
-      ORDER BY price ASC NULLS LAST, sent_at DESC
-      LIMIT 10
-      `,
-      [user.id, chatId, linkId, since]
-    );
-
-    if (!itemsQ.rowCount) {
-      await tgSend(
-        chatId,
-        `Brak wysłanych ofert z ceną dla linku <b>${linkId}</b> od ${formatDateTime(since)}.`
-      );
-      return;
-    }
-
-    let out = `💰 Najtańsze wysłane (link ${linkRow.id})\n${escapeHtml(
-      linkRow.name || "(bez nazwy)"
-    )}\nOd: ${formatDateTime(since)}\n\n`;
-
-    itemsQ.rows.forEach((it, idx) => {
-      const priceStr =
-        it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
-
-      out += `${idx + 1}. <b>${escapeHtml(it.title || "(bez tytułu)")}</b>\n`;
-      if (priceStr) out += `💰 ${escapeHtml(priceStr)}\n`;
-      if (it.url) out += `${escapeHtml(it.url)}\n`;
-      out += `📅 ${formatDateTime(it.sent_at)}\n\n`;
-    });
-
-    await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
-    return;
-  }
-
-  const globalQ = await dbQuery(
-    `
-    SELECT so.link_id, so.title, so.price, so.currency, so.url, so.sent_at, l.name AS link_name
-    FROM sent_offers so
-    JOIN links l ON l.id = so.link_id
-    WHERE so.user_id = $1 AND so.chat_id = $2 AND so.sent_at >= $3 AND so.price IS NOT NULL
-    ORDER BY so.price ASC NULLS LAST, so.sent_at DESC
-    LIMIT 10
-    `,
-    [user.id, chatId, sinceChat]
-  );
-
-  if (!globalQ.rowCount) {
-    await tgSend(chatId, `Brak wysłanych ofert z ceną od ${formatDateTime(sinceChat)}.`);
-    return;
-  }
-
-  let out = `💰 Najtańsze wysłane (od ${formatDateTime(sinceChat)})\n\n`;
-  const linkHints = new Set();
-
-  globalQ.rows.forEach((row, idx) => {
-    const priceStr =
-      row.price != null ? `${row.price} ${row.currency || ""}`.trim() : "";
-    out += `${idx + 1}. [${row.link_id}] ${escapeHtml(row.link_name || "(bez nazwy)")}\n`;
-    out += `<b>${escapeHtml(row.title || "(bez tytułu)")}</b>\n`;
-    if (priceStr) out += `💰 ${escapeHtml(priceStr)}\n`;
-    if (row.url) out += `${escapeHtml(row.url)}\n`;
-    out += `📅 ${formatDateTime(row.sent_at)}\n\n`;
-    linkHints.add(row.link_id);
-  });
-
-  if (linkHints.size) {
-    out += `Pełna historia: ${[...linkHints]
-      .map((id) => `/najtansze ${id}`)
-      .join(" ")}`;
-  }
-
-  await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
-}
-
-// ---------- /admin_reset (tylko ADMIN_TG_ID) ----------
-
-async function handleAdminReset(msg, user, argText) {
-  const chatId = String(msg.chat.id);
-  const fromId = String(msg.from?.id || "");
-
-  if (!ADMIN_TG_ID || fromId !== ADMIN_TG_ID) {
-    await tgSend(chatId, "Brak uprawnień do tej komendy.");
-    return;
-  }
-
-  const targetTgId = (argText || "").trim();
-  if (!targetTgId) {
-    await tgSend(chatId, "Użycie: <code>/admin_reset &lt;tg_id&gt;</code>");
-    return;
-  }
-
-  const targetUserId = await getUserIdByTelegramId(targetTgId);
-  if (!targetUserId) {
-    await tgSend(chatId, `Nie znalazłem użytkownika o TG ID ${escapeHtml(targetTgId)}.`);
-    return;
-  }
-
-  const chatUpd = await dbQuery(
-    `
-    UPDATE chat_notifications
-    SET notify_from = NOW(), daily_count = 0, daily_count_date = CURRENT_DATE
-    WHERE user_id = $1
-    `,
-    [targetUserId]
-  );
-
-  const linkUpd = await dbQuery(
-    `
-    UPDATE links
-    SET notify_from = NOW()
-    WHERE user_id = $1
-    `,
-    [targetUserId]
-  );
-
-  await tgSend(
-    chatId,
-    `Reset wykonany dla tg_id=${escapeHtml(targetTgId)} (user_id=${targetUserId}).\nchat_rows=${chatUpd.rowCount} link_rows=${linkUpd.rowCount}`
-  );
 }
 
 // ---------- callback_query z przycisków (lnmode:ID:mode) ----------
@@ -1539,6 +1403,19 @@ await ensureUser(
   const command = commandRaw.toLowerCase().split("\@")[0];
   const argText = rest.join(" ").trim();
 
+
+  // komenda panel
+  if (command === "/panel") {
+    await handlePanel(msg, user);
+    return;
+  }
+
+  // komendy admina
+  if (command === "/admin_reset" || command === "/areset") {
+    await handleAdminReset(msg, user, argText);
+    return;
+  }
+
 // komendy per-link: /pojedyncze_18 /zbiorcze_18 /off_18 /on_18
 const perLink = command.match(/^\/(pojedyncze|zbiorcze|off|on)_(\d+)$/i);
 if (perLink) {
@@ -1560,6 +1437,12 @@ if (perLink) {
     }
 
     await clearLinkNotificationMode(user.id, String(chatId), linkId);
+
+    // reset notify_from dla tego konkretnego linku (zaczynam zbierać oferty od teraz)
+    await dbQuery(
+      `UPDATE links SET notify_from = NOW() WHERE id = $1 AND user_id = $2`,
+      [Number(linkId), Number(user.id)]
+    );
 
     // odczytaj domyślny tryb czatu (żeby ładnie potwierdzić)
     const cn = await dbQuery(
@@ -1611,10 +1494,6 @@ if (perLink) {
     await handleLanguage(msg, user, argText);
   } else if (command.startsWith("/najnowsze")) {
     await handleNajnowsze(msg, user, argText);
-  } else if (command.startsWith("/najtansze")) {
-    await handleNajtansze(msg, user, argText);
-  } else if (command.startsWith("/admin_reset")) {
-    await handleAdminReset(msg, user, argText);
   } else {
     await tgSend(chatId, "❓ Nieznana komenda. Użyj /help.");
   }

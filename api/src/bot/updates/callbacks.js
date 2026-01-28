@@ -23,6 +23,13 @@ export function createHandleCallback(ctx) {
     setPerLinkMode,
   } = ctx;
 
+  function modeLabel(lang, mode) {
+    const m = String(mode || "single").toLowerCase();
+    if (m === "batch") return t(lang, "mode_batch");
+    if (m === "off") return t(lang, "mode_off");
+    return t(lang, "mode_single");
+  }
+
   return async function handleCallback(update) {
     const cq = update.callback_query;
     if (!cq) return;
@@ -30,15 +37,16 @@ export function createHandleCallback(ctx) {
     const data = cq.data || "";
     const chatId = cq.message?.chat?.id;
     const fromId = cq.from?.id ? String(cq.from.id) : null;
+    const langFast = cq.from?.language_code || "en";
 
     if (!chatId || !fromId) {
-      await tgAnswerCb(cq.id, "Missing chat/user data.");
+      await tgAnswerCb(cq.id, t(langFast, "missing_chat_user"));
       return;
     }
 
     const u = await getUserWithPlanByTelegramId(fromId);
     if (!u?.id) {
-      await tgAnswerCb(cq.id, "Use /start.", true);
+      await tgAnswerCb(cq.id, t(langFast, "prompt_start"), true);
       return;
     }
 
@@ -48,7 +56,7 @@ export function createHandleCallback(ctx) {
     if (mLang) {
       const newLang = isSupportedLang(normLang(mLang[1])) ? normLang(mLang[1]) : FYD_DEFAULT_LANG;
       await setLang(String(chatId), u, newLang);
-      await tgAnswerCb(cq.id, "OK");
+      await tgAnswerCb(cq.id, t(newLang, "language_switched"));
       await tgSend(String(chatId), t(newLang, "language_set", { language: escapeHtml(langLabel(newLang)) }));
       return;
     }
@@ -58,16 +66,17 @@ export function createHandleCallback(ctx) {
       const linkId = Number(m[1]);
       const mode = String(m[2]).toLowerCase();
       const res = await setPerLinkMode(String(chatId), u.id, linkId, mode);
-      if (!res.ok) { await tgAnswerCb(cq.id, "Can't set mode.", true); return; }
+      if (!res.ok) { 
+        const lang = await fydResolveLang(String(chatId), u, cq?.from?.language_code || "");
+        await tgAnswerCb(cq.id, t(lang, "cant_set_mode"), true); 
+        return; 
+      }
       const lang = await fydResolveLang(String(chatId), u, cq?.from?.language_code || "");
-      const pretty =
-        res.mode === "batch" ? (lang === "pl" ? "zbiorczo" : "batch") :
-        res.mode === "off" ? "OFF" :
-        (lang === "pl" ? "pojedynczo" : "single");
-      await tgAnswerCb(cq.id, lang === "pl" ? `Ustawiono: ${pretty}` : `Set: ${pretty}`);
+      const pretty = modeLabel(lang, res.mode);
+      await tgAnswerCb(cq.id, t(lang, "link_mode_set_cb", { mode: pretty }));
       return;
     }
 
-    await tgAnswerCb(cq.id, "Unknown action.");
+    await tgAnswerCb(cq.id, t(langFast, "unknown_action"));
   };
 }

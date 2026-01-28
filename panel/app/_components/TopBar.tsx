@@ -1,6 +1,26 @@
 import { t, type Lang } from "../_lib/i18n";
-import LangSwitch from "./LangSwitch";
-import LangAutoSync from "./LangAutoSync";
+
+function getLangDisplay(lang: Lang) {
+  const LANGS = [
+    { code: "pl", name: "Polski", flag: "🇵🇱" },
+    { code: "en", name: "English", flag: "🇬🇧" },
+    { code: "de", name: "Deutsch", flag: "🇩🇪" },
+    { code: "fr", name: "Français", flag: "🇫🇷" },
+    { code: "es", name: "Español", flag: "🇪🇸" },
+    { code: "it", name: "Italiano", flag: "🇮🇹" },
+    { code: "pt", name: "Português", flag: "🇵🇹" },
+    { code: "ro", name: "Română", flag: "🇷🇴" },
+    { code: "nl", name: "Nederlands", flag: "🇳🇱" },
+    { code: "cs", name: "Čeština", flag: "🇨🇿" },
+    { code: "sk", name: "Slovenčina", flag: "🇸🇰" },
+  ];
+  const found = LANGS.find(l => l.code === lang);
+  return found ? `${found.flag} ${found.name}` : "🌍 English";
+}
+
+
+
+
 
 function prettyPlan(code: string) {
   const c = String(code || "").toLowerCase();
@@ -45,8 +65,20 @@ export default async function TopBar(props: {
       </div>
 
       <div className="flex items-center gap-3 flex-wrap">
-        <LangAutoSync value={lang} />
-        <LangSwitch value={lang} />
+        {/* Static language display */}
+        <div className="border rounded px-3 py-2 text-sm whitespace-nowrap" title={t(lang, "settings_link")}>
+          {getLangDisplay(lang)}
+        </div>
+
+        {/* Settings link */}
+        <a 
+          href="/settings" 
+          className="border rounded px-3 py-2 text-sm bg-blue-600 text-white hover:bg-blue-700 whitespace-nowrap"
+          title={t(lang, "settings_link")}
+        >
+          ⚙️ {t(lang, "settings_title")}
+        </a>
+
         <div className="border rounded-full px-4 py-2 text-sm whitespace-nowrap">
           {t(lang, "plan_lower")} {planName}
           {expires} · {active}

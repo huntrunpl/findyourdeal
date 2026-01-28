@@ -107,15 +107,12 @@ export function createHistoryHandlers(ctx) {
         );
   
         if (!lk.rowCount) {
-          await tgSend(chatId, lang === "pl"
-            ? `❌ Link <b>${linkIdArg}</b> nie należy do Twojego konta.`
-            : `❌ Link <b>${linkIdArg}</b> is not on your account.`
-          );
+          await tgSend(chatId, t(lang, "hist_bad_link_id", { linkId: linkIdArg }));
           return;
         }
-  
+
         const linkName = String(lk.rows[0]?.name || "").trim();
-  
+
         const r = await dbQuery(
           `SELECT *
            FROM public.link_items
@@ -124,7 +121,7 @@ export function createHistoryHandlers(ctx) {
            LIMIT 120`,
           [linkIdArg]
         );
-  
+
         const rows = (r.rows || []).map((row) => {
           const x = toItem(row);
           x.linkId = linkIdArg;
@@ -134,13 +131,13 @@ export function createHistoryHandlers(ctx) {
   
         rows.sort((a, b) => (b.ts - a.ts) || (b.id - a.id));
         const top = rows.slice(0, 10);
-  
+
         if (!top.length) {
-          await tgSend(chatId, lang === "pl" ? "Brak zapisanych ofert dla tego linku." : "No saved items for this link.");
+          await tgSend(chatId, t(lang, "hist_none"));
           return;
         }
-  
-        let out = lang === "pl" ? "🆕 Najnowsze oferty (z historii):\n\n" : "🆕 Latest offers (from history):\n\n";
+
+        let out = t(lang, "hist_latest_title") + "\n\n";
         for (let i = 0; i < top.length; i++) {
           const it = top[i];
           out += `${i + 1}. ${escapeHtml(it.title)} [${linkIdArg} – ${escapeHtml(linkName)}]\n`;
@@ -167,13 +164,13 @@ export function createHistoryHandlers(ctx) {
       const rows = (g.rows || []).map(toItem);
       rows.sort((a, b) => (b.ts - a.ts) || (b.id - a.id));
       const top = rows.slice(0, 10);
-  
+
       if (!top.length) {
-        await tgSend(chatId, lang === "pl" ? "Brak zapisanych ofert w historii." : "No saved items in history.");
+        await tgSend(chatId, t(lang, "hist_none"));
         return;
       }
-  
-      let out = lang === "pl" ? "🆕 Najnowsze oferty (GLOBALNIE):\n\n" : "🆕 Latest offers (GLOBAL):\n\n";
+
+      let out = t(lang, "hist_latest_title_global") + "\n\n";
       for (let i = 0; i < top.length; i++) {
         const it = top[i];
         out += `${i + 1}. ${escapeHtml(it.title)} [${it.linkId} – ${escapeHtml(it.linkName)}]\n`;
@@ -181,17 +178,11 @@ export function createHistoryHandlers(ctx) {
         if (it.url) out += `${escapeHtml(it.url)}\n`;
         out += "\n";
       }
-      out += (lang === "pl"
-        ? "Pełna historia konkretnego linku: /najnowsze ID"
-        : "Full history for a specific link: /latest ID"
-      );
-  
+      out += "\n" + t(lang, "hist_latest_footer");
+
       await tgSend(chatId, out.trim(), { disable_web_page_preview: true, link_preview_options: { is_disabled: true } });
     } catch (e) {
-      await tgSend(chatId, lang === "pl"
-        ? `❌ Błąd /najnowsze: ${escapeHtml(String(e?.message || e))}`
-        : `❌ /latest error: ${escapeHtml(String(e?.message || e))}`
-      );
+      await tgSend(chatId, t(lang, "hist_error", { error: escapeHtml(String(e?.message || e)) }));
     }
   }
   
@@ -236,27 +227,17 @@ export function createHistoryHandlers(ctx) {
     const linkId = Number(parts[1] || 0);
     const useLink = Number.isFinite(linkId) && linkId > 0;
   
-    const head = lang === "pl" ? "💸 Najtańsze oferty (z historii):" : "💸 Cheapest offers (from history):";
-    const none = lang === "pl" ? "Brak zapisanych ofert w historii." : "No saved offers in history.";
-    const bad = lang === "pl" ? "Nieprawidłowe ID linku." : "Invalid link ID.";
-  
     if (parts.length > 1 && !useLink) {
-      await tgSend(chatId, bad);
+      await tgSend(chatId, t(lang, "hist_bad_link_id"));
       return;
     }
-  
+
     const m = await linkItemsMeta();
     if (!m.ts || !m.url || !m.price) {
-      await tgSend(chatId, none);
+      await tgSend(chatId, t(lang, "hist_none"));
       return;
     }
-  
-    const ts = qi(m.ts);
-    const url = qi(m.url);
-    const title = m.title ? qi(m.title) : null;
-    const price = qi(m.price);
-    const currency = m.currency ? qi(m.currency) : null;
-  
+
     const where = useLink ? "AND li.link_id=$2" : "";
     const params = useLink ? [Number(user.id), linkId] : [Number(user.id)];
   
@@ -280,11 +261,11 @@ export function createHistoryHandlers(ctx) {
   
     const r = await dbQuery(sql, params);
     if (!r.rows || !r.rows.length) {
-      await tgSend(chatId, none);
+      await tgSend(chatId, t(lang, "hist_none"));
       return;
     }
-  
-    let out = head + "\n\n";
+
+    let out = t(lang, "hist_cheapest_title") + "\n\n";
     let i = 1;
     for (const row of r.rows) {
       const t0 = String(row.title || "").trim();
@@ -293,15 +274,14 @@ export function createHistoryHandlers(ctx) {
       const c0 = String(row.currency || "").trim();
       const tag = row.link_name ? ` [${row.link_id} – ${row.link_name}]` : ` [${row.link_id}]`;
   
-      out += `${i}. ${escapeHtml(t0 || (lang === "pl" ? "(bez tytułu)" : "(no title)"))}${escapeHtml(tag)}\n`;
+      out += `${i}. ${escapeHtml(t0 || t(lang, "hist_no_title"))}${escapeHtml(tag)}\n`;
       out += `💰 ${escapeHtml(p0)}${c0 ? " " + escapeHtml(c0) : ""}\n`;
       out += `${escapeHtml(u0)}\n\n`;
       i++;
     }
-  
+
     await tgSend(chatId, out.trim(), { disable_web_page_preview: true, link_preview_options: { is_disabled: true } });
   }
-  
 
   return { handleNewestStrict, handleCheapest };
 }

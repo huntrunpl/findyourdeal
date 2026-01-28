@@ -708,17 +708,96 @@ for (const [code, txt] of Object.entries(__fydPlansPlatinumAddon10)) {
 
 // __FYD_I18N_EXTRA_KEYS_V1__
 const __FYD_I18N_EXTRA = {
-  en:{ new_listings:"New listings", full_history:"Full history:", btn_disable:"Disable this link", btn_single:"Single", btn_batch:"Batch" },
-  pl:{ new_listings:"Nowe ogłoszenia", full_history:"Pełną historię zobaczysz w", btn_disable:"Wyłącz ten link", btn_single:"Pojedynczo", btn_batch:"Zbiorczo" },
-  de:{ new_listings:"Neue Angebote", full_history:"Voller Verlauf:", btn_disable:"Link deaktivieren", btn_single:"Einzeln", btn_batch:"Sammel" },
-  fr:{ new_listings:"Nouvelles annonces", full_history:"Historique complet :", btn_disable:"Désactiver ce lien", btn_single:"Unitaire", btn_batch:"Groupé" },
-  es:{ new_listings:"Nuevos anuncios", full_history:"Historial completo:", btn_disable:"Desactivar este enlace", btn_single:"Individual", btn_batch:"Por lotes" },
-  it:{ new_listings:"Nuovi annunci", full_history:"Cronologia completa:", btn_disable:"Disattiva questo link", btn_single:"Singolo", btn_batch:"Raggruppato" },
-  pt:{ new_listings:"Novos anúncios", full_history:"Histórico completo:", btn_disable:"Desativar este link", btn_single:"Individual", btn_batch:"Em lote" },
-  nl:{ new_listings:"Nieuwe advertenties", full_history:"Volledige geschiedenis:", btn_disable:"Deze link uitzetten", btn_single:"Los", btn_batch:"Batch" },
-  ro:{ new_listings:"Anunțuri noi", full_history:"Istoric complet:", btn_disable:"Dezactivează acest link", btn_single:"Individual", btn_batch:"În lot" },
-  cs:{ new_listings:"Nové inzeráty", full_history:"Celá historie:", btn_disable:"Vypnout tento odkaz", btn_single:"Jednotlivě", btn_batch:"Hromadně" },
-  hu:{ new_listings:"Új hirdetések", full_history:"Teljes előzmény:", btn_disable:"Link kikapcsolása", btn_single:"Egyenként", btn_batch:"Csoportosan" },
+  "en": {
+    "new_listings": "New listings",
+    "full_history": "Full history:",
+    "btn_disable": "Disable this link",
+    "btn_single": "Single",
+    "btn_batch": "Batch",
+    "status_title": "ℹ️ Bot Status",
+    "status_quiet_on": "Quiet hours: enabled ({from}:00–{to}:00)"
+  },
+  "pl": {
+    "new_listings": "Nowe ogłoszenia",
+    "full_history": "Pełną historię zobaczysz w",
+    "btn_disable": "Wyłącz ten link",
+    "btn_single": "Pojedynczo",
+    "btn_batch": "Zbiorczo",
+    "status_title": "ℹ️ Status bota",
+    "status_quiet_on": "Cisza nocna: włączona ({from}:00–{to}:00)"
+  },
+  "de": {
+    "new_listings": "Neue Angebote",
+    "full_history": "Voller Verlauf:",
+    "btn_disable": "Link deaktivieren",
+    "btn_single": "Einzeln",
+    "btn_batch": "Sammel",
+    "status_title": "ℹ️ Bot-Status",
+    "status_quiet_on": "Ruhezeiten: aktiviert ({from}:00–{to}:00)"
+  },
+  "fr": {
+    "new_listings": "Nouvelles annonces",
+    "full_history": "Historique complet :",
+    "btn_disable": "Désactiver ce lien",
+    "btn_single": "Unitaire",
+    "btn_batch": "Groupé"
+  },
+  "es": {
+    "new_listings": "Nuevos anuncios",
+    "full_history": "Historial completo:",
+    "btn_disable": "Desactivar este enlace",
+    "btn_single": "Individual",
+    "btn_batch": "Por lotes"
+  },
+  "it": {
+    "new_listings": "Nuovi annunci",
+    "full_history": "Cronologia completa:",
+    "btn_disable": "Disattiva questo link",
+    "btn_single": "Singolo",
+    "btn_batch": "Raggruppato"
+  },
+  "pt": {
+    "new_listings": "Novos anúncios",
+    "full_history": "Histórico completo:",
+    "btn_disable": "Desativar este link",
+    "btn_single": "Individual",
+    "btn_batch": "Em lote"
+  },
+  "nl": {
+    "new_listings": "Nieuwe advertenties",
+    "full_history": "Volledige geschiedenis:",
+    "btn_disable": "Deze link uitzetten",
+    "btn_single": "Los",
+    "btn_batch": "Batch",
+    "status_title": "ℹ️ Bot-status",
+    "status_quiet_on": "Stille uren: ingeschakeld ({from}:00–{to}:00)"
+  },
+  "ro": {
+    "new_listings": "Anunțuri noi",
+    "full_history": "Istoric complet:",
+    "btn_disable": "Dezactivează acest link",
+    "btn_single": "Individual",
+    "btn_batch": "În lot",
+    "status_title": "ℹ️ Starea bot",
+    "status_quiet_on": "Ore liniștite: activate ({from}:00–{to}:00)"
+  },
+  "cs": {
+    "new_listings": "Nové inzeráty",
+    "full_history": "Celá historie:",
+    "btn_disable": "Vypnout tento odkaz",
+    "btn_single": "Jednotlivě",
+    "btn_batch": "Hromadně",
+    "status_title": "ℹ️ Stav bota",
+    "status_quiet_on": "Tiché hodiny: povoleny ({from}:00–{to}:00)"
+  },
+  "hu": {
+    "new_listings": "Új hirdetések",
+    "full_history": "Teljes előzmény:",
+    "btn_disable": "Link kikapcsolása",
+    "btn_single": "Egyenként",
+    "btn_batch": "Csoportosan"
+  },
+  "sk": {}
 };
 
 export function t(lang, key, vars = {}) {
@@ -728,11 +807,11 @@ export function t(lang, key, vars = {}) {
     const base = raw.includes("-") ? raw.split("-")[0] : raw;
     const L = base || "en";
     const ex = __FYD_I18N_EXTRA[L] || __FYD_I18N_EXTRA.en;
-    if (ex && Object.prototype.hasOwnProperty.call(ex, key)) return ex[key];
+    if (ex && Object.prototype.hasOwnProperty.call(ex, key)) { const val = ex[key]; return String(val).replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? `{${k}}`)); };
   } catch (e) {}
 
   const L = normalizeLang(lang);
   const dict = DICTS[L] || DICTS[DEFAULT_LANG];
-  const base = (dict && dict[key]) ?? DICTS[DEFAULT_LANG][key] ?? key;
-  return String(base).replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? `{${k}}`));
+  const baseStr = (dict && dict[key]) ?? DICTS[DEFAULT_LANG][key] ?? key;
+  return String(baseStr).replace(/\{(\w+)\}/g, (_, k) => (vars[k] ?? `{${k}}`));
 }

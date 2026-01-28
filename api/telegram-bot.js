@@ -1,6 +1,5 @@
 import dotenv from "dotenv";
 dotenv.config();
-import crypto from "crypto";
 
 import fetch from "node-fetch";
 import pg from "pg";
@@ -10,6 +9,7 @@ import {
   ensureUser,
   getUserWithPlanByTelegramId,
   getUserById,
+  getUserIdByTelegramId,
   getLinksByUserId,
   countActiveLinksForUserId,
   countEnabledLinksForUserId,
@@ -34,6 +34,7 @@ const { Pool } = pg;
 
 const TG = process.env.TELEGRAM_BOT_TOKEN || "";
 const DATABASE_URL = process.env.DATABASE_URL || "";
+const ADMIN_TG_ID = process.env.ADMIN_TG_ID ? String(process.env.ADMIN_TG_ID) : null;
 
 if (!TG) {
   console.error("Brak TELEGRAM_BOT_TOKEN w env, wychodzę.");
@@ -51,43 +52,7 @@ const pool = new Pool({
 // limit dzienny powiadomień na jeden chat – informacyjnie do /status
 const MAX_DAILY_NOTIFICATIONS = 200;
 
-// admini uprawnieni do komend typu /admin_reset
-const ADMIN_TELEGRAM_IDS = new Set(
-  String(process.env.ADMIN_TELEGRAM_IDS || "")
-    .split(/[\s,]+/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-);
-
 // ---------- helpery ogólne ----------
-
-
-// ---------- panel login token ----------
-
-async function createPanelLoginToken(userId) {
-  const token = crypto.randomBytes(24).toString("base64url");
-  await pool.query(
-    `INSERT INTO panel_login_tokens (token, user_id, expires_at)
-     VALUES ($1, $2, now() + interval '10 minutes')`,
-    [token, userId]
-  );
-  return token;
-}
-
-async function handlePanel(msg, user) {
-  const chatId = String(msg.chat.id);
-
-  try {
-    const token = await createPanelLoginToken(user.id);
-    const minutes = Number(process.env.PANEL_TOKEN_MINUTES || "10") || 10;
-
-    const url = `https://panel.findyourdeal.app/api/auth/login?token=${encodeURIComponent(token)}`;
-    await tgSend(chatId, `Panel: ${url}\nToken ważny ${minutes} minut.`);
-  } catch (e) {
-    console.error("handlePanel error:", e);
-    await tgSend(chatId, "❌ Nie udało się wygenerować linku do panelu.");
-  }
-}
 
 async function dbQuery(sql, params = []) {
   const client = await pool.connect();
@@ -106,8 +71,19 @@ function escapeHtml(str = "") {
     .replace(/>/g, "&gt;");
 }
 
-function isAdmin(tgId) {
-  return ADMIN_TELEGRAM_IDS.has(String(tgId || ""));
+function getTodayStart() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
+function formatDateTime(val) {
+  if (!val) return "n/a";
+  try {
+    const d = val instanceof Date ? val : new Date(val);
+    return d.toISOString().replace("T", " ").slice(0, 19);
+  } catch {
+    return "n/a";
+  }
 }
 
 async function tgApi(method, payload) {
@@ -193,6 +169,32 @@ async function ensureChatNotificationsRow(chatId, userId) {
     `,
     [String(chatId), Number(userId)]
   );
+}
+
+async function fetchChatNotifyFrom(chatId, userId) {
+  try {
+    const res = await dbQuery(
+      `SELECT notify_from FROM chat_notifications WHERE chat_id = $1 AND user_id = $2 LIMIT 1`,
+      [String(chatId), Number(userId)]
+    );
+    const raw = res.rows[0]?.notify_from;
+    return raw ? new Date(raw) : new Date(0);
+  } catch {
+    return new Date(0);
+  }
+}
+
+async function fetchLinkNotifyFrom(linkId, userId) {
+  try {
+    const res = await dbQuery(
+      `SELECT notify_from FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
+      [Number(linkId), Number(userId)]
+    );
+    const raw = res.rows[0]?.notify_from;
+    return raw ? new Date(raw) : new Date(0);
+  } catch {
+    return new Date(0);
+  }
 }
 
 // ---------- long polling z getUpdates ----------
@@ -380,9 +382,9 @@ const STATUS_I18N = (() => {
     es,
     it: en, // fallback to EN for remaining languages
     pt: en,
-    ru: en,
+    ro: en,
+    nl: en,
     cs: en,
-    hu: en,
     sk
   };
 })();
@@ -405,9 +407,10 @@ function formatDateYMD(dateVal) {
 
 async function buildStatusMessage(chatId, user) {
   const userId = user.id;
-  // Prefer language_code first because DB trigger restricts lang to pl/en
-  const lang = normalizeLangCode(user.language_code || user.lang || user.language || "en");
+  // Prefer user.lang (SoT) over language_code
+  const lang = normalizeLangCode(user.lang || user.language_code || user.language || "en");
   const t = STATUS_I18N[lang] || STATUS_I18N.en;
+  const todayStr = new Date().toISOString().slice(0, 10);
 
   const linkLimit = Number(user.links_limit_total ?? getEffectiveLinkLimit(user) ?? 0) || 0;
   const dailyLimit = Number(user.daily_notifications_limit ?? MAX_DAILY_NOTIFICATIONS) || MAX_DAILY_NOTIFICATIONS;
@@ -445,7 +448,6 @@ async function buildStatusMessage(chatId, user) {
   }
 
   // Chat notification settings
-  const todayStr = new Date().toISOString().slice(0, 10);
   let chatDefaultMode = "single";
   let chatEnabled = true;
   try {
@@ -465,14 +467,25 @@ async function buildStatusMessage(chatId, user) {
       const mode = (row.mode || "single").toLowerCase();
       chatDefaultMode = mode;
 
-      let daily = row.daily_count || 0;
-      let dateStr = null;
-      if (row.daily_count_date) {
-        dateStr = row.daily_count_date.toISOString
-          ? row.daily_count_date.toISOString().slice(0, 10)
-          : String(row.daily_count_date).slice(0, 10);
+      let daily = 0;
+      try {
+        const dr = await dbQuery(
+          `SELECT COUNT(*)::int AS cnt FROM sent_offers WHERE chat_id = $1 AND user_id = $2 AND sent_at >= $3`,
+          [String(chatId), userId, getTodayStart()]
+        );
+        daily = dr.rows[0]?.cnt ?? 0;
+      } catch (e) {
+        console.error("buildStatusMessage: sent_offers daily error", e);
+        let fallback = row.daily_count || 0;
+        let dateStr = null;
+        if (row.daily_count_date) {
+          dateStr = row.daily_count_date.toISOString
+            ? row.daily_count_date.toISOString().slice(0, 10)
+            : String(row.daily_count_date).slice(0, 10);
+        }
+        if (dateStr !== todayStr) fallback = 0;
+        daily = fallback;
       }
-      if (dateStr !== todayStr) daily = 0;
 
       const modeLabel = mode === "batch" ? "batch" : mode === "off" ? "off" : "single";
       text += `${t.chatLine(enabled, modeLabel, daily, dailyLimit)}\n\n`;
@@ -566,6 +579,8 @@ async function handleHelp(msg) {
     "/usun &lt;ID&gt; – wyłącz monitorowanie linku o ID\n" +
     "/dodaj &lt;url&gt; [nazwa] – dodaj nowy link do monitorowania\n" +
     "/status – status bota, planu i powiadomień\n\n" +
+    "/panel – otwórz panel zarządzania\n\n" +
+    "/panel – otwórz panel zarządzania\n\n" +
     "Powiadomienia PUSH na tym czacie:\n" +
     "/on – włącz\n" +
     "/off – wyłącz\n" +
@@ -577,16 +592,35 @@ async function handleHelp(msg) {
     "/cisza – pokaż\n" +
     "/cisza HH-HH – ustaw (np. /cisza 22-7)\n" +
     "/cisza_off – wyłącz\n\n" +
-    "Historia:\n" +
-    "/najnowsze &lt;ID&gt; – najnowsze oferty z historii linku\n\n" +
+    "Historia wysłanych:\n" +
+    "/najnowsze – najnowsze wysłane na tym czacie\n" +
+    "/najnowsze &lt;ID&gt; – najnowsze wysłane dla linku\n" +
+    "/najtansze – najtańsze wysłane na tym czacie\n" +
+    "/najtansze &lt;ID&gt; – najtańsze wysłane dla linku\n\n" +
     "Przykłady:\n" +
     "<code>/lista</code>\n" +
     "<code>/usun 18</code>\n" +
     "<code>/dodaj https://www.olx.pl/oferty/?q=iphone14 iPhone 14 OLX</code>\n" +
-    "<code>/najnowsze 18</code>";
+    "<code>/najnowsze</code>";
 
   await tgSend(chatId, text);
 }
+
+// ---------- /panel ----------
+
+async function handlePanel(msg) {
+  const chatId = msg.chat.id;
+
+  const text =
+    "🧭 <b>Panel</b>\n\n" +
+    "Tu zarządzasz linkami i ustawieniami.\n\n" +
+    "Wejdź: <a href=\"https://panel.findyourdeal.app/links\">https://panel.findyourdeal.app/links</a>";
+
+  await tgSend(chatId, text);
+}
+
+// ---------- /panel ----------
+
 
 // ---------- /lista ----------
 
@@ -775,27 +809,15 @@ async function handleNotificationsOn(msg, user) {
 
   await ensureChatNotificationsRow(chatId, user.id);
 
-  // reset notify_from (zaczynam zbierać oferty od teraz)
   await dbQuery(
     `
-    INSERT INTO chat_notifications (chat_id, user_id, enabled, mode, updated_at, notify_from)
-    VALUES ($1, $2, TRUE, 'single', NOW(), NOW())
+    INSERT INTO chat_notifications (chat_id, user_id, enabled, mode, updated_at)
+    VALUES ($1, $2, TRUE, 'single', NOW())
     ON CONFLICT (chat_id, user_id) DO UPDATE SET
       enabled = TRUE,
-      updated_at = NOW(),
-      notify_from = NOW()
+      updated_at = NOW()
     `,
     [chatId, user.id]
-  );
-
-  // reset notify_from dla wszystkich aktywnych linków tego użytkownika
-  await dbQuery(
-    `
-    UPDATE links
-    SET notify_from = NOW()
-    WHERE user_id = $1 AND active = TRUE
-    `,
-    [user.id]
   );
 
   await tgSend(chatId, t.notifOn);
@@ -820,54 +842,6 @@ async function handleNotificationsOff(msg, user) {
   );
 
   await tgSend(chatId, t.notifOff);
-}
-
-// ---------- /admin_reset /areset ----------
-
-async function handleAdminReset(msg, _user, argText) {
-  const callerTgId = msg?.from?.id;
-  if (!isAdmin(callerTgId)) {
-    await tgSend(msg.chat.id, "❌ Unauthorized (admin only).");
-    return;
-  }
-
-  const targetTgId = String(argText || "").trim();
-  if (!targetTgId) {
-    await tgSend(msg.chat.id, "❌ Podaj Telegram ID: /admin_reset <telegram_id>");
-    return;
-  }
-
-  const targetUser = await getUserWithPlanByTelegramId(targetTgId);
-  if (!targetUser) {
-    await tgSend(msg.chat.id, `❌ User not found for Telegram ID ${escapeHtml(targetTgId)}`);
-    return;
-  }
-
-  const chatRes = await dbQuery(
-    `
-    UPDATE chat_notifications
-    SET daily_count = 0,
-        daily_count_date = CURRENT_DATE,
-        notify_from = NOW()
-    WHERE user_id = $1
-    `,
-    [Number(targetUser.id)]
-  );
-
-  const linkRes = await dbQuery(
-    `
-    UPDATE links
-    SET notify_from = NOW()
-    WHERE user_id = $1 AND active = TRUE
-    `,
-    [Number(targetUser.id)]
-  );
-
-  const nowIso = new Date().toISOString();
-  await tgSend(
-    msg.chat.id,
-    `✅ Admin reset done for TG ${escapeHtml(targetTgId)}. Chats updated: ${chatRes.rowCount}. Active links reset: ${linkRes.rowCount}. Since=${nowIso}`
-  );
 }
 
 // ---------- /pojedyncze /zbiorcze (domyślny tryb czatu) ----------
@@ -1032,7 +1006,7 @@ const LANG_I18N = {
 
 const getLangConfirmTemplate = (lang) => LANG_CONFIRM[lang] || LANG_CONFIRM.en;
 
-// Komunikaty i18n dla poleceń (ON/OFF, tryby, per-link, cisza)
+// Komunikaty i18n dla poleceń (ON/OFF, tryby, per-link, cisza, historia)
 const CMD_I18N = {
   pl: {
     notifOn: "✅ Powiadomienia WŁĄCZONE na tym czacie.",
@@ -1046,6 +1020,28 @@ const CMD_I18N = {
     quietSet: (from, to) => `🌙 Ustawiono ciszę nocną: <b>${from}:00–${to}:00</b>`,
     quietOn: (from, to) => `🌙 Cisza nocna: <b>WŁĄCZONA</b>, godziny ${from}:00–${to}:00`,
     quietOff: "🌙 Cisza nocna: <b>WYŁĄCZONA</b>",
+    histLatestTitle: "🧾 Najnowsze wysłane",
+    histLatestPerLink: (linkId, linkName, since) => `🧾 Najnowsze wysłane (link ${linkId})\n<b>${escapeHtml(linkName || "(bez nazwy)")}</b>\nOd: ${formatDateTime(since)}`,
+    histLatestGlobal: (since) => `🧾 Najnowsze wysłane (od ${formatDateTime(since)})`,
+    histLatestNone: (since) => `Brak wysłanych ofert od ${formatDateTime(since)}.`,
+    histLatestNonePerLink: (linkId, since) => `Brak wysłanych ofert dla linku <b>${linkId}</b> od ${formatDateTime(since)}.`,
+    histLatestFooter: "Pełna historia:",
+    histCheapestTitle: "💰 Najtańsze wysłane",
+    histCheapestPerLink: (linkId, linkName, since) => `💰 Najtańsze wysłane (link ${linkId})\n<b>${escapeHtml(linkName || "(bez nazwy)")}</b>\nOd: ${formatDateTime(since)}`,
+    histCheapestGlobal: (since) => `💰 Najtańsze wysłane (od ${formatDateTime(since)})`,
+    histCheapestNone: (since) => `Brak wysłanych ofert z ceną od ${formatDateTime(since)}.`,
+    histCheapestNonePerLink: (linkId, since) => `Brak wysłanych ofert z ceną dla linku <b>${linkId}</b> od ${formatDateTime(since)}.`,
+    histNoTitle: "(bez tytułu)",
+    histFullHistory: "Pełna historia:",
+    tz_current: (tz, now) => `🌍 Aktualna strefa czasowa: <b>${tz}</b>\nTeraz: ${now}`,
+    tz_usage: "Użycie: <code>/timezone [strefa|alias|reset]</code>\nPrzykłady: <code>/timezone warsaw</code>, <code>/timezone Europe/London</code>, <code>/timezone reset</code>",
+    tz_set_ok: (tz) => `✅ Strefa czasowa ustawiona na: <b>${tz}</b>`,
+    tz_reset_ok: (tz) => `✅ Strefa czasowa zresetowana do domyślnej: <b>${tz}</b>`,
+    tz_invalid: (input) => `❌ Nieprawidłowa strefa czasowa: <b>${input}</b>`,
+    tz_examples: "Przykłady poprawne:\n• <code>/timezone warsaw</code>\n• <code>/timezone Europe/Berlin</code>\n• <code>/timezone newyork</code>\n• <code>/timezone America/Los_Angeles</code>\n• <code>/timezone reset</code>",
+    settings_title: "⚙️ Ustawienia",
+    settings_open_panel: (url) => `Możesz zarządzać językiem i strefą czasową w panelu: <a href="${url}">${url}</a>`,
+    settings_hint: "Użyj <code>/timezone</code> aby zmienić strefę w Telegramie, lub wejdź na stronę Ustawień.",
   },
   en: {
     notifOn: "✅ Notifications ENABLED on this chat.",
@@ -1059,11 +1055,348 @@ const CMD_I18N = {
     quietSet: (from, to) => `🌙 Quiet hours set: <b>${from}:00–${to}:00</b>`,
     quietOn: (from, to) => `🌙 Quiet hours: <b>ENABLED</b>, ${from}:00–${to}:00`,
     quietOff: "🌙 Quiet hours: <b>DISABLED</b>",
+    histLatestTitle: "🧾 Latest sent",
+    histLatestPerLink: (linkId, linkName, since) => `🧾 Latest sent (link ${linkId})\n<b>${escapeHtml(linkName || "(no name)")}</b>\nSince: ${formatDateTime(since)}`,
+    histLatestGlobal: (since) => `🧾 Latest sent (since ${formatDateTime(since)})`,
+    histLatestNone: (since) => `No sent offers since ${formatDateTime(since)}.`,
+    histLatestNonePerLink: (linkId, since) => `No sent offers for link <b>${linkId}</b> since ${formatDateTime(since)}.`,
+    histLatestFooter: "Full history:",
+    histCheapestTitle: "💰 Cheapest sent",
+    histCheapestPerLink: (linkId, linkName, since) => `💰 Cheapest sent (link ${linkId})\n<b>${escapeHtml(linkName || "(no name)")}</b>\nSince: ${formatDateTime(since)}`,
+    histCheapestGlobal: (since) => `💰 Cheapest sent (since ${formatDateTime(since)})`,
+    histCheapestNone: (since) => `No sent offers with price since ${formatDateTime(since)}.`,
+    histCheapestNonePerLink: (linkId, since) => `No sent offers with price for link <b>${linkId}</b> since ${formatDateTime(since)}.`,
+    histNoTitle: "(no title)",
+    histFullHistory: "Full history:",
+    tz_current: (tz, now) => `🌍 Current timezone: <b>${tz}</b>\nNow: ${now}`,
+    tz_usage: "Usage: <code>/timezone [zone|alias|reset]</code>\nExamples: <code>/timezone warsaw</code>, <code>/timezone Europe/London</code>, <code>/timezone reset</code>",
+    tz_set_ok: (tz) => `✅ Timezone set to: <b>${tz}</b>`,
+    tz_reset_ok: (tz) => `✅ Timezone reset to default: <b>${tz}</b>`,
+    tz_invalid: (input) => `❌ Invalid timezone: <b>${input}</b>`,
+    tz_examples: "Valid examples:\n• <code>/timezone warsaw</code>\n• <code>/timezone Europe/Berlin</code>\n• <code>/timezone newyork</code>\n• <code>/timezone America/Los_Angeles</code>\n• <code>/timezone reset</code>",
+    settings_title: "⚙️ Settings",
+    settings_open_panel: (url) => `You can manage your language and timezone in the panel: <a href="${url}">${url}</a>`,
+    settings_hint: "Use <code>/timezone</code> to change timezone via Telegram, or visit the Settings page.",
+  },
+  de: {
+    notifOn: "✅ Benachrichtigungen AKTIVIERT in diesem Chat.",
+    notifOff: "⛔ Benachrichtigungen DEAKTIVIERT in diesem Chat.",
+    modeSingle: "📨 Standardmodus: <b>einzeln</b> (für diesen Chat).",
+    modeBatch: "📦 Standardmodus: <b>Batch</b> (für diesen Chat).",
+    linkEnabled: (id, prettyMode) => `✅ Link <b>${id}</b> AKTIVIERT in diesem Chat (erbt Chat-Modus: <b>${prettyMode}</b>).`,
+    linkSet: (id, prettyMode) => `✅ Link <b>${id}</b> gesetzt auf: <b>${prettyMode}</b> in diesem Chat`,
+    linkNotYours: (id) => `❌ Link <b>${id}</b> gehört nicht Ihrem Konto.`,
+    setModeFail: (reason) => `❌ ${reason || "Fehler beim Setzen des Modus."}`,
+    quietSet: (from, to) => `🌙 Ruhestunden eingestellt: <b>${from}:00–${to}:00</b>`,
+    quietOn: (from, to) => `🌙 Ruhestunden: <b>AKTIVIERT</b>, ${from}:00–${to}:00`,
+    quietOff: "🌙 Ruhestunden: <b>DEAKTIVIERT</b>",
+    histLatestTitle: "🧾 Letzte gesendet",
+    histLatestPerLink: (linkId, linkName, since) => `🧾 Letzte gesendet (Link ${linkId})\n<b>${escapeHtml(linkName || "(kein Name)")}</b>\nSeit: ${formatDateTime(since)}`,
+    histLatestGlobal: (since) => `🧾 Letzte gesendet (seit ${formatDateTime(since)})`,
+    histLatestNone: (since) => `Keine gesendeten Angebote seit ${formatDateTime(since)}.`,
+    histLatestNonePerLink: (linkId, since) => `Keine gesendeten Angebote für Link <b>${linkId}</b> seit ${formatDateTime(since)}.`,
+    histLatestFooter: "Vollständiger Verlauf:",
+    histCheapestTitle: "💰 Günstigste gesendet",
+    histCheapestPerLink: (linkId, linkName, since) => `💰 Günstigste gesendet (Link ${linkId})\n<b>${escapeHtml(linkName || "(kein Name)")}</b>\nSeit: ${formatDateTime(since)}`,
+    histCheapestGlobal: (since) => `💰 Günstigste gesendet (seit ${formatDateTime(since)})`,
+    histCheapestNone: (since) => `Keine gesendeten Angebote mit Preis seit ${formatDateTime(since)}.`,
+    histCheapestNonePerLink: (linkId, since) => `Keine gesendeten Angebote mit Preis für Link <b>${linkId}</b> seit ${formatDateTime(since)}.`,
+    histNoTitle: "(kein Titel)",
+    histFullHistory: "Vollständiger Verlauf:",
+    tz_current: (tz, now) => `🌍 Aktuelle Zeitzone: <b>${tz}</b>\nJetzt: ${now}`,
+    tz_usage: "Verwendung: <code>/timezone [zone|alias|reset]</code>\nBeispiele: <code>/timezone warsaw</code>, <code>/timezone Europe/London</code>, <code>/timezone reset</code>",
+    tz_set_ok: (tz) => `✅ Zeitzone eingestellt auf: <b>${tz}</b>`,
+    tz_reset_ok: (tz) => `✅ Zeitzone auf Standard zurückgesetzt: <b>${tz}</b>`,
+    tz_invalid: (input) => `❌ Ungültige Zeitzone: <b>${input}</b>`,
+    tz_examples: "Gültige Beispiele:\n• <code>/timezone warsaw</code>\n• <code>/timezone Europe/Berlin</code>\n• <code>/timezone newyork</code>\n• <code>/timezone America/Los_Angeles</code>\n• <code>/timezone reset</code>",
+    settings_title: "⚙️ Einstellungen",
+    settings_open_panel: (url) => `Du kannst Sprache und Zeitzone im Panel verwalten: <a href="${url}">${url}</a>`,
+    settings_hint: "Verwende <code>/timezone</code> um die Zeitzone in Telegram zu ändern, oder besuche die Einstellungsseite.",
+  },
+  fr: {
+    notifOn: "✅ Notifications ACTIVÉES sur ce chat.",
+    notifOff: "⛔ Notifications DÉSACTIVÉES sur ce chat.",
+    modeSingle: "📨 Mode par défaut: <b>simple</b> (pour ce chat).",
+    modeBatch: "📦 Mode par défaut: <b>batch</b> (pour ce chat).",
+    linkEnabled: (id, prettyMode) => `✅ Lien <b>${id}</b> ACTIVÉ sur ce chat (hérite du mode chat: <b>${prettyMode}</b>).`,
+    linkSet: (id, prettyMode) => `✅ Lien <b>${id}</b> défini sur: <b>${prettyMode}</b> sur ce chat`,
+    linkNotYours: (id) => `❌ Le lien <b>${id}</b> n'appartient pas à votre compte.`,
+    setModeFail: (reason) => `❌ ${reason || "Impossible de définir le mode."}`,
+    quietSet: (from, to) => `🌙 Heures silencieuses définies: <b>${from}:00–${to}:00</b>`,
+    quietOn: (from, to) => `🌙 Heures silencieuses: <b>ACTIVÉES</b>, ${from}:00–${to}:00`,
+    quietOff: "🌙 Heures silencieuses: <b>DÉSACTIVÉES</b>",
+    histLatestTitle: "🧾 Dernières envoyées",
+    histLatestPerLink: (linkId, linkName, since) => `🧾 Dernières envoyées (lien ${linkId})\n<b>${escapeHtml(linkName || "(sans nom)")}</b>\nDepuis: ${formatDateTime(since)}`,
+    histLatestGlobal: (since) => `🧾 Dernières envoyées (depuis ${formatDateTime(since)})`,
+    histLatestNone: (since) => `Aucune offre envoyée depuis ${formatDateTime(since)}.`,
+    histLatestNonePerLink: (linkId, since) => `Aucune offre envoyée pour le lien <b>${linkId}</b> depuis ${formatDateTime(since)}.`,
+    histLatestFooter: "Historique complet:",
+    histCheapestTitle: "💰 Les moins chères envoyées",
+    histCheapestPerLink: (linkId, linkName, since) => `💰 Les moins chères envoyées (lien ${linkId})\n<b>${escapeHtml(linkName || "(sans nom)")}</b>\nDepuis: ${formatDateTime(since)}`,
+    histCheapestGlobal: (since) => `💰 Les moins chères envoyées (depuis ${formatDateTime(since)})`,
+    histCheapestNone: (since) => `Aucune offre avec prix envoyée depuis ${formatDateTime(since)}.`,
+    histCheapestNonePerLink: (linkId, since) => `Aucune offre avec prix pour le lien <b>${linkId}</b> depuis ${formatDateTime(since)}.`,
+    histNoTitle: "(sans titre)",
+    histFullHistory: "Historique complet:",
+    tz_current: (tz, now) => `🌍 Fuseau horaire actuel : <b>${tz}</b>\nMaintenant : ${now}`,
+    tz_usage: "Utilisation : <code>/timezone [zone|alias|reset]</code>\nExemples : <code>/timezone warsaw</code>, <code>/timezone Europe/London</code>, <code>/timezone reset</code>",
+    tz_set_ok: (tz) => `✅ Fuseau horaire défini sur : <b>${tz}</b>`,
+    tz_reset_ok: (tz) => `✅ Fuseau horaire réinitialisé par défaut : <b>${tz}</b>`,
+    tz_invalid: (input) => `❌ Fuseau horaire invalide : <b>${input}</b>`,
+    tz_examples: "Exemples valides :\n• <code>/timezone warsaw</code>\n• <code>/timezone Europe/Berlin</code>\n• <code>/timezone newyork</code>\n• <code>/timezone America/Los_Angeles</code>\n• <code>/timezone reset</code>",
+    settings_title: "⚙️ Paramètres",
+    settings_open_panel: (url) => `Vous pouvez gérer votre langue et votre fuseau horaire dans le panneau : <a href="${url}">${url}</a>`,
+    settings_hint: "Utilisez <code>/timezone</code> pour changer le fuseau horaire sur Telegram, ou visitez la page Paramètres.",
+  },
+  es: {
+    notifOn: "✅ Notificaciones HABILITADAS en este chat.",
+    notifOff: "⛔ Notificaciones DESHABILITADAS en este chat.",
+    modeSingle: "📨 Modo por defecto: <b>simple</b> (para este chat).",
+    modeBatch: "📦 Modo por defecto: <b>lote</b> (para este chat).",
+    linkEnabled: (id, prettyMode) => `✅ Enlace <b>${id}</b> HABILITADO en este chat (hereda modo de chat: <b>${prettyMode}</b>).`,
+    linkSet: (id, prettyMode) => `✅ Enlace <b>${id}</b> establecido a: <b>${prettyMode}</b> en este chat`,
+    linkNotYours: (id) => `❌ El enlace <b>${id}</b> no pertenece a su cuenta.`,
+    setModeFail: (reason) => `❌ ${reason || "Error al establecer el modo."}`,
+    quietSet: (from, to) => `🌙 Horario silencioso establecido: <b>${from}:00–${to}:00</b>`,
+    quietOn: (from, to) => `🌙 Horario silencioso: <b>HABILITADO</b>, ${from}:00–${to}:00`,
+    quietOff: "🌙 Horario silencioso: <b>DESHABILITADO</b>",
+    histLatestTitle: "🧾 Últimos enviados",
+    histLatestPerLink: (linkId, linkName, since) => `🧾 Últimos enviados (enlace ${linkId})\n<b>${escapeHtml(linkName || "(sin nombre)")}</b>\nDesde: ${formatDateTime(since)}`,
+    histLatestGlobal: (since) => `🧾 Últimos enviados (desde ${formatDateTime(since)})`,
+    histLatestNone: (since) => `Sin ofertas enviadas desde ${formatDateTime(since)}.`,
+    histLatestNonePerLink: (linkId, since) => `Sin ofertas enviadas para el enlace <b>${linkId}</b> desde ${formatDateTime(since)}.`,
+    histLatestFooter: "Historial completo:",
+    histCheapestTitle: "💰 Más baratos enviados",
+    histCheapestPerLink: (linkId, linkName, since) => `💰 Más baratos enviados (enlace ${linkId})\n<b>${escapeHtml(linkName || "(sin nombre)")}</b>\nDesde: ${formatDateTime(since)}`,
+    histCheapestGlobal: (since) => `💰 Más baratos enviados (desde ${formatDateTime(since)})`,
+    histCheapestNone: (since) => `Sin ofertas con precio enviadas desde ${formatDateTime(since)}.`,
+    histCheapestNonePerLink: (linkId, since) => `Sin ofertas con precio para el enlace <b>${linkId}</b> desde ${formatDateTime(since)}.`,
+    histNoTitle: "(sin título)",
+    histFullHistory: "Historial completo:",
+    tz_current: (tz, now) => `🌍 Fuseau horaire actuel : <b>${tz}</b>\nMaintenant : ${now}`,
+    tz_usage: "Utilisation : <code>/timezone [zone|alias|reset]</code>\nExemples : <code>/timezone warsaw</code>, <code>/timezone Europe/London</code>, <code>/timezone reset</code>",
+    tz_set_ok: (tz) => `✅ Fuseau horaire défini sur : <b>${tz}</b>`,
+    tz_reset_ok: (tz) => `✅ Fuseau horaire réinitialisé par défaut : <b>${tz}</b>`,
+    tz_invalid: (input) => `❌ Fuseau horaire invalide : <b>${input}</b>`,
+    tz_examples: "Exemples valides :\n• <code>/timezone warsaw</code>\n• <code>/timezone Europe/Berlin</code>\n• <code>/timezone newyork</code>\n• <code>/timezone America/Los_Angeles</code>\n• <code>/timezone reset</code>",
+    settings_title: "⚙️ Configuración",
+    settings_open_panel: (url) => `Puedes gestionar tu idioma y zona horaria en el panel: <a href="${url}">${url}</a>`,
+    settings_hint: "Usa <code>/timezone</code> para cambiar la zona horaria en Telegram, o visita la página de Configuración.",
+  },
+  it: {
+    notifOn: "✅ Notifiche ABILITATE su questa chat.",
+    notifOff: "⛔ Notifiche DISABILITATE su questa chat.",
+    modeSingle: "📨 Modalità predefinita: <b>singolo</b> (per questa chat).",
+    modeBatch: "📦 Modalità predefinita: <b>batch</b> (per questa chat).",
+    linkEnabled: (id, prettyMode) => `✅ Collegamento <b>${id}</b> ABILITATO su questa chat (eredita modalità chat: <b>${prettyMode}</b>).`,
+    linkSet: (id, prettyMode) => `✅ Collegamento <b>${id}</b> impostato a: <b>${prettyMode}</b> su questa chat`,
+    linkNotYours: (id) => `❌ Il collegamento <b>${id}</b> non appartiene al tuo account.`,
+    setModeFail: (reason) => `❌ ${reason || "Impossibile impostare la modalità."}`,
+    quietSet: (from, to) => `🌙 Ore silenziose impostate: <b>${from}:00–${to}:00</b>`,
+    quietOn: (from, to) => `🌙 Ore silenziose: <b>ABILITATE</b>, ${from}:00–${to}:00`,
+    quietOff: "🌙 Ore silenziose: <b>DISABILITATE</b>",
+    histLatestTitle: "🧾 Ultimi inviati",
+    histLatestPerLink: (linkId, linkName, since) => `🧾 Ultimi inviati (collegamento ${linkId})\n<b>${escapeHtml(linkName || "(nessun nome)")}</b>\nDa: ${formatDateTime(since)}`,
+    histLatestGlobal: (since) => `🧾 Ultimi inviati (da ${formatDateTime(since)})`,
+    histLatestNone: (since) => `Nessuna offerta inviata da ${formatDateTime(since)}.`,
+    histLatestNonePerLink: (linkId, since) => `Nessuna offerta inviata per il collegamento <b>${linkId}</b> da ${formatDateTime(since)}.`,
+    histLatestFooter: "Cronologia completa:",
+    histCheapestTitle: "💰 Più economici inviati",
+    histCheapestPerLink: (linkId, linkName, since) => `💰 Più economici inviati (collegamento ${linkId})\n<b>${escapeHtml(linkName || "(nessun nome)")}</b>\nDa: ${formatDateTime(since)}`,
+    histCheapestGlobal: (since) => `💰 Più economici inviati (da ${formatDateTime(since)})`,
+    histCheapestNone: (since) => `Nessuna offerta con prezzo inviata da ${formatDateTime(since)}.`,
+    histCheapestNonePerLink: (linkId, since) => `Nessuna offerta con prezzo per il collegamento <b>${linkId}</b> da ${formatDateTime(since)}.`,
+    histNoTitle: "(nessun titolo)",
+    histFullHistory: "Cronologia completa:",
+    tz_current: (tz, now) => `🌍 Zona horaria actual: <b>${tz}</b>\nAhora: ${now}`,
+    tz_usage: "Uso: <code>/timezone [zona|alias|reset]</code>\nEjemplos: <code>/timezone warsaw</code>, <code>/timezone Europe/London</code>, <code>/timezone reset</code>",
+    tz_set_ok: (tz) => `✅ Zona horaria establecida en: <b>${tz}</b>`,
+    tz_reset_ok: (tz) => `✅ Zona horaria restablecida a predeterminada: <b>${tz}</b>`,
+    tz_invalid: (input) => `❌ Zona horaria inválida: <b>${input}</b>`,
+    tz_examples: "Ejemplos válidos:\n• <code>/timezone warsaw</code>\n• <code>/timezone Europe/Berlin</code>\n• <code>/timezone newyork</code>\n• <code>/timezone America/Los_Angeles</code>\n• <code>/timezone reset</code>",
+    settings_title: "⚙️ Impostazioni",
+    settings_open_panel: (url) => `Puoi gestire la tua lingua e il fuso orario nel pannello: <a href="${url}">${url}</a>`,
+    settings_hint: "Usa <code>/timezone</code> per cambiare il fuso orario su Telegram, o visita la pagina Impostazioni.",
+  },
+  pt: {
+    notifOn: "✅ Notificações HABILITADAS neste chat.",
+    notifOff: "⛔ Notificações DESABILITADAS neste chat.",
+    modeSingle: "📨 Modo padrão: <b>simples</b> (para este chat).",
+    modeBatch: "📦 Modo padrão: <b>lote</b> (para este chat).",
+    linkEnabled: (id, prettyMode) => `✅ Link <b>${id}</b> HABILITADO neste chat (herda modo de chat: <b>${prettyMode}</b>).`,
+    linkSet: (id, prettyMode) => `✅ Link <b>${id}</b> definido para: <b>${prettyMode}</b> neste chat`,
+    linkNotYours: (id) => `❌ O link <b>${id}</b> não pertence à sua conta.`,
+    setModeFail: (reason) => `❌ ${reason || "Falha ao definir o modo."}`,
+    quietSet: (from, to) => `🌙 Horário silencioso definido: <b>${from}:00–${to}:00</b>`,
+    quietOn: (from, to) => `🌙 Horário silencioso: <b>HABILITADO</b>, ${from}:00–${to}:00`,
+    quietOff: "🌙 Horário silencioso: <b>DESABILITADO</b>",
+    histLatestTitle: "🧾 Últimos enviados",
+    histLatestPerLink: (linkId, linkName, since) => `🧾 Últimos enviados (link ${linkId})\n<b>${escapeHtml(linkName || "(sem nome)")}</b>\nDesde: ${formatDateTime(since)}`,
+    histLatestGlobal: (since) => `🧾 Últimos enviados (desde ${formatDateTime(since)})`,
+    histLatestNone: (since) => `Nenhuma oferta enviada desde ${formatDateTime(since)}.`,
+    histLatestNonePerLink: (linkId, since) => `Nenhuma oferta enviada para o link <b>${linkId}</b> desde ${formatDateTime(since)}.`,
+    histLatestFooter: "Histórico completo:",
+    histCheapestTitle: "💰 Mais baratos enviados",
+    histCheapestPerLink: (linkId, linkName, since) => `💰 Mais baratos enviados (link ${linkId})\n<b>${escapeHtml(linkName || "(sem nome)")}</b>\nDesde: ${formatDateTime(since)}`,
+    histCheapestGlobal: (since) => `💰 Mais baratos enviados (desde ${formatDateTime(since)})`,
+    histCheapestNone: (since) => `Nenhuma oferta com preço enviada desde ${formatDateTime(since)}.`,
+    histCheapestNonePerLink: (linkId, since) => `Nenhuma oferta com preço para o link <b>${linkId}</b> desde ${formatDateTime(since)}.`,
+    histNoTitle: "(sem título)",
+    histFullHistory: "Histórico completo:",
+    tz_current: (tz, now) => `🌍 Fuso horário atual: <b>${tz}</b>\nAgora: ${now}`,
+    tz_usage: "Uso: <code>/timezone [zona|alias|reset]</code>\nExemplos: <code>/timezone warsaw</code>, <code>/timezone Europe/London</code>, <code>/timezone reset</code>",
+    tz_set_ok: (tz) => `✅ Fuso horário definido para: <b>${tz}</b>`,
+    tz_reset_ok: (tz) => `✅ Fuso horário redefinido para padrão: <b>${tz}</b>`,
+    tz_invalid: (input) => `❌ Fuso horário inválido: <b>${input}</b>`,
+    tz_examples: "Exemplos válidos:\n• <code>/timezone warsaw</code>\n• <code>/timezone Europe/Berlin</code>\n• <code>/timezone newyork</code>\n• <code>/timezone America/Los_Angeles</code>\n• <code>/timezone reset</code>",
+    settings_title: "⚙️ Configurações",
+    settings_open_panel: (url) => `Você pode gerenciar seu idioma e fuso horário no painel: <a href="${url}">${url}</a>`,
+    settings_hint: "Use <code>/timezone</code> para alterar o fuso horário no Telegram, ou visite a página de Configurações.",
+  },
+  ro: {
+    notifOn: "✅ Notificări ACTIVATE pe acest chat.",
+    notifOff: "⛔ Notificări DEZACTIVATE pe acest chat.",
+    modeSingle: "📨 Mod implicit: <b>singular</b> (pentru acest chat).",
+    modeBatch: "📦 Mod implicit: <b>lot</b> (pentru acest chat).",
+    linkEnabled: (id, prettyMode) => `✅ Legătură <b>${id}</b> ACTIVATĂ pe acest chat (moștenește modul chat: <b>${prettyMode}</b>).`,
+    linkSet: (id, prettyMode) => `✅ Legătură <b>${id}</b> setată la: <b>${prettyMode}</b> pe acest chat`,
+    linkNotYours: (id) => `❌ Legătura <b>${id}</b> nu aparține contului tău.`,
+    setModeFail: (reason) => `❌ ${reason || "Eroare la setarea modului."}`,
+    quietSet: (from, to) => `🌙 Ore silențioase setate: <b>${from}:00–${to}:00</b>`,
+    quietOn: (from, to) => `🌙 Ore silențioase: <b>ACTIVATE</b>, ${from}:00–${to}:00`,
+    quietOff: "🌙 Ore silențioase: <b>DEZACTIVATE</b>",
+    histLatestTitle: "🧾 Ultimele trimise",
+    histLatestPerLink: (linkId, linkName, since) => `🧾 Ultimele trimise (legătură ${linkId})\n<b>${escapeHtml(linkName || "(fără nume)")}</b>\nDe la: ${formatDateTime(since)}`,
+    histLatestGlobal: (since) => `🧾 Ultimele trimise (de la ${formatDateTime(since)})`,
+    histLatestNone: (since) => `Nicio ofertă trimisă de la ${formatDateTime(since)}.`,
+    histLatestNonePerLink: (linkId, since) => `Nicio ofertă trimisă pentru legătura <b>${linkId}</b> de la ${formatDateTime(since)}.`,
+    histLatestFooter: "Istoric complet:",
+    histCheapestTitle: "💰 Cele mai ieftine trimise",
+    histCheapestPerLink: (linkId, linkName, since) => `💰 Cele mai ieftine trimise (legătură ${linkId})\n<b>${escapeHtml(linkName || "(fără nume)")}</b>\nDe la: ${formatDateTime(since)}`,
+    histCheapestGlobal: (since) => `💰 Cele mai ieftine trimise (de la ${formatDateTime(since)})`,
+    histCheapestNone: (since) => `Nicio ofertă cu preț trimisă de la ${formatDateTime(since)}.`,
+    histCheapestNonePerLink: (linkId, since) => `Nicio ofertă cu preț pentru legătura <b>${linkId}</b> de la ${formatDateTime(since)}.`,
+    histNoTitle: "(fără titlu)",
+    histFullHistory: "Istoric complet:",
+    tz_current: (tz, now) => `🌍 Fuso orario attuale: <b>${tz}</b>\nOra: ${now}`,
+    tz_usage: "Uso: <code>/timezone [zona|alias|reset]</code>\nEsempi: <code>/timezone warsaw</code>, <code>/timezone Europe/London</code>, <code>/timezone reset</code>",
+    tz_set_ok: (tz) => `✅ Fuso orario impostato su: <b>${tz}</b>`,
+    tz_reset_ok: (tz) => `✅ Fuso orario ripristinato a predefinito: <b>${tz}</b>`,
+    tz_invalid: (input) => `❌ Fuso orario non valido: <b>${input}</b>`,
+    tz_examples: "Esempi validi:\n• <code>/timezone warsaw</code>\n• <code>/timezone Europe/Berlin</code>\n• <code>/timezone newyork</code>\n• <code>/timezone America/Los_Angeles</code>\n• <code>/timezone reset</code>",
+    settings_title: "⚙️ Setări",
+    settings_open_panel: (url) => `Poți gestiona limba și fusul orar în panelul: <a href="${url}">${url}</a>`,
+    settings_hint: "Folosește <code>/timezone</code> pentru a schimba fusul orar în Telegram, sau vizitează pagina de Setări.",
+  },
+  nl: {
+    notifOn: "✅ Meldingen INGESCHAKELD op deze chat.",
+    notifOff: "⛔ Meldingen UITGESCHAKELD op deze chat.",
+    modeSingle: "📨 Standaardmodus: <b>enkel</b> (voor deze chat).",
+    modeBatch: "📦 Standaardmodus: <b>batch</b> (voor deze chat).",
+    linkEnabled: (id, prettyMode) => `✅ Link <b>${id}</b> INGESCHAKELD op deze chat (erft chatmodus: <b>${prettyMode}</b>).`,
+    linkSet: (id, prettyMode) => `✅ Link <b>${id}</b> ingesteld op: <b>${prettyMode}</b> op deze chat`,
+    linkNotYours: (id) => `❌ Link <b>${id}</b> behoort niet tot uw account.`,
+    setModeFail: (reason) => `❌ ${reason || "Fout bij het instellen van de modus."}`,
+    quietSet: (from, to) => `🌙 Stille uren ingesteld: <b>${from}:00–${to}:00</b>`,
+    quietOn: (from, to) => `🌙 Stille uren: <b>INGESCHAKELD</b>, ${from}:00–${to}:00`,
+    quietOff: "🌙 Stille uren: <b>UITGESCHAKELD</b>",
+    histLatestTitle: "🧾 Laatst verzonden",
+    histLatestPerLink: (linkId, linkName, since) => `🧾 Laatst verzonden (link ${linkId})\n<b>${escapeHtml(linkName || "(geen naam)")}</b>\nSinds: ${formatDateTime(since)}`,
+    histLatestGlobal: (since) => `🧾 Laatst verzonden (sinds ${formatDateTime(since)})`,
+    histLatestNone: (since) => `Geen verzonden aanbiedingen sinds ${formatDateTime(since)}.`,
+    histLatestNonePerLink: (linkId, since) => `Geen verzonden aanbiedingen voor link <b>${linkId}</b> sinds ${formatDateTime(since)}.`,
+    histLatestFooter: "Volledige geschiedenis:",
+    histCheapestTitle: "💰 Goedkoopste verzonden",
+    histCheapestPerLink: (linkId, linkName, since) => `💰 Goedkoopste verzonden (link ${linkId})\n<b>${escapeHtml(linkName || "(geen naam)")}</b>\nSinds: ${formatDateTime(since)}`,
+    histCheapestGlobal: (since) => `💰 Goedkoopste verzonden (sinds ${formatDateTime(since)})`,
+    histCheapestNone: (since) => `Geen verzonden aanbiedingen met prijs sinds ${formatDateTime(since)}.`,
+    histCheapestNonePerLink: (linkId, since) => `Geen verzonden aanbiedingen met prijs voor link <b>${linkId}</b> sinds ${formatDateTime(since)}.`,
+    histNoTitle: "(geen titel)",
+    histFullHistory: "Volledige geschiedenis:",
+    tz_current: (tz, now) => `🌍 Fuso horário atual: <b>${tz}</b>\nAgora: ${now}`,
+    tz_usage: "Uso: <code>/timezone [zona|alias|reset]</code>\nExemplos: <code>/timezone warsaw</code>, <code>/timezone Europe/London</code>, <code>/timezone reset</code>",
+    tz_set_ok: (tz) => `✅ Fuso horário definido para: <b>${tz}</b>`,
+    tz_reset_ok: (tz) => `✅ Fuso horário redefinido para padrão: <b>${tz}</b>`,
+    tz_invalid: (input) => `❌ Fuso horário inválido: <b>${input}</b>`,
+    tz_examples: "Exemplos válidos:\n• <code>/timezone warsaw</code>\n• <code>/timezone Europe/Berlin</code>\n• <code>/timezone newyork</code>\n• <code>/timezone America/Los_Angeles</code>\n• <code>/timezone reset</code>",
+    settings_title: "⚙️ Instellingen",
+    settings_open_panel: (url) => `Je kunt je taal en tijdzone beheren in het paneel: <a href="${url}">${url}</a>`,
+    settings_hint: "Gebruik <code>/timezone</code> om de tijdzone in Telegram te wijzigen, of bezoek de Instellingenpagina.",
+  },
+  cs: {
+    notifOn: "✅ Oznámení POVOLENA v tomto chatu.",
+    notifOff: "⛔ Oznámení ZAKÁZÁNA v tomto chatu.",
+    modeSingle: "📨 Výchozí režim: <b>jednotlivé</b> (pro tento chat).",
+    modeBatch: "📦 Výchozí režim: <b>dávka</b> (pro tento chat).",
+    linkEnabled: (id, prettyMode) => `✅ Odkaz <b>${id}</b> POVOLEN v tomto chatu (dědí režim chatu: <b>${prettyMode}</b>).`,
+    linkSet: (id, prettyMode) => `✅ Odkaz <b>${id}</b> nastaven na: <b>${prettyMode}</b> v tomto chatu`,
+    linkNotYours: (id) => `❌ Odkaz <b>${id}</b> nepatří vašemu účtu.`,
+    setModeFail: (reason) => `❌ ${reason || "Chyba při nastavení režimu."}`,
+    quietSet: (from, to) => `🌙 Tichá doba nastavena: <b>${from}:00–${to}:00</b>`,
+    quietOn: (from, to) => `🌙 Tichá doba: <b>POVOLENA</b>, ${from}:00–${to}:00`,
+    quietOff: "🌙 Tichá doba: <b>ZAKÁZÁNA</b>",
+    histLatestTitle: "🧾 Poslední odeslané",
+    histLatestPerLink: (linkId, linkName, since) => `🧾 Poslední odeslané (odkaz ${linkId})\n<b>${escapeHtml(linkName || "(bez názvu)")}</b>\nOd: ${formatDateTime(since)}`,
+    histLatestGlobal: (since) => `🧾 Poslední odeslané (od ${formatDateTime(since)})`,
+    histLatestNone: (since) => `Žádné odeslané nabídky od ${formatDateTime(since)}.`,
+    histLatestNonePerLink: (linkId, since) => `Žádné odeslané nabídky pro odkaz <b>${linkId}</b> od ${formatDateTime(since)}.`,
+    histLatestFooter: "Úplná historie:",
+    histCheapestTitle: "💰 Nejlevnější odeslané",
+    histCheapestPerLink: (linkId, linkName, since) => `💰 Nejlevnější odeslané (odkaz ${linkId})\n<b>${escapeHtml(linkName || "(bez názvu)")}</b>\nOd: ${formatDateTime(since)}`,
+    histCheapestGlobal: (since) => `💰 Nejlevnější odeslané (od ${formatDateTime(since)})`,
+    histCheapestNone: (since) => `Žádné odeslané nabídky s cenou od ${formatDateTime(since)}.`,
+    histCheapestNonePerLink: (linkId, since) => `Žádné odeslané nabídky s cenou pro odkaz <b>${linkId}</b> od ${formatDateTime(since)}.`,
+    histNoTitle: "(bez názvu)",
+    histFullHistory: "Úplná historie:",
+    tz_current: (tz, now) => `🌍 Fusul orar curent: <b>${tz}</b>\nAcum: ${now}`,
+    tz_usage: "Utilizare: <code>/timezone [zona|alias|reset]</code>\nExemple: <code>/timezone warsaw</code>, <code>/timezone Europe/London</code>, <code>/timezone reset</code>",
+    tz_set_ok: (tz) => `✅ Fusul orar setat la: <b>${tz}</b>`,
+    tz_reset_ok: (tz) => `✅ Fusul orar resetat la implicit: <b>${tz}</b>`,
+    tz_invalid: (input) => `❌ Fus orar invalid: <b>${input}</b>`,
+    tz_examples: "Exemple valide:\n• <code>/timezone warsaw</code>\n• <code>/timezone Europe/Berlin</code>\n• <code>/timezone newyork</code>\n• <code>/timezone America/Los_Angeles</code>\n• <code>/timezone reset</code>",
+    settings_title: "⚙️ Nastavení",
+    settings_open_panel: (url) => `Svůj jazyk a časové pásmo můžeš spravovat v panelu: <a href="${url}">${url}</a>`,
+    settings_hint: "Použij <code>/timezone</code> pro změnu časového pásma v Telegramu, nebo navštiv stránku Nastavení.",
+  },
+  sk: {
+    notifOn: "✅ Oznámenia POVOLENÉ v tomto chate.",
+    notifOff: "⛔ Oznámenia ZAKÁZANÉ v tomto chate.",
+    modeSingle: "📨 Predvolený režim: <b>jednotlivé</b> (pre tento chat).",
+    modeBatch: "📦 Predvolený režim: <b>dávka</b> (pre tento chat).",
+    linkEnabled: (id, prettyMode) => `✅ Odkaz <b>${id}</b> POVOLENÝ v tomto chate (dedí režim chatu: <b>${prettyMode}</b>).`,
+    linkSet: (id, prettyMode) => `✅ Odkaz <b>${id}</b> nastavený na: <b>${prettyMode}</b> v tomto chate`,
+    linkNotYours: (id) => `❌ Odkaz <b>${id}</b> nepatrí vášmu konto.`,
+    setModeFail: (reason) => `❌ ${reason || "Chyba pri nastavení režimu."}`,
+    quietSet: (from, to) => `🌙 Tichý čas nastavený: <b>${from}:00–${to}:00</b>`,
+    quietOn: (from, to) => `🌙 Tichý čas: <b>POVOLENÝ</b>, ${from}:00–${to}:00`,
+    quietOff: "🌙 Tichý čas: <b>ZAKÁZANÝ</b>",
+    histLatestTitle: "🧾 Posledné odoslané",
+    histLatestPerLink: (linkId, linkName, since) => `🧾 Posledné odoslané (odkaz ${linkId})\n<b>${escapeHtml(linkName || "(bez názvu)")}</b>\nOd: ${formatDateTime(since)}`,
+    histLatestGlobal: (since) => `🧾 Posledné odoslané (od ${formatDateTime(since)})`,
+    histLatestNone: (since) => `Žiadne odoslané ponuky od ${formatDateTime(since)}.`,
+    histLatestNonePerLink: (linkId, since) => `Žiadne odoslané ponuky pre odkaz <b>${linkId}</b> od ${formatDateTime(since)}.`,
+    histLatestFooter: "Úplná história:",
+    histCheapestTitle: "💰 Najlacnejšie odoslané",
+    histCheapestPerLink: (linkId, linkName, since) => `💰 Najlacnejšie odoslané (odkaz ${linkId})\n<b>${escapeHtml(linkName || "(bez názvu)")}</b>\nOd: ${formatDateTime(since)}`,
+    histCheapestGlobal: (since) => `💰 Najlacnejšie odoslané (od ${formatDateTime(since)})`,
+    histCheapestNone: (since) => `Žiadne odoslané ponuky s cenou od ${formatDateTime(since)}.`,
+    histCheapestNonePerLink: (linkId, since) => `Žiadne odoslané ponuky s cenou pre odkaz <b>${linkId}</b> od ${formatDateTime(since)}.`,
+    histNoTitle: "(bez názvu)",
+    histFullHistory: "Úplná história:",
+    tz_current: (tz, now) => `🌍 Huidige tijdzone: <b>${tz}</b>\nNu: ${now}`,
+    tz_usage: "Gebruik: <code>/timezone [zone|alias|reset]</code>\nVoorbeelden: <code>/timezone warsaw</code>, <code>/timezone Europe/London</code>, <code>/timezone reset</code>",
+    tz_set_ok: (tz) => `✅ Tijdzone ingesteld op: <b>${tz}</b>`,
+    tz_reset_ok: (tz) => `✅ Tijdzone gereset naar standaard: <b>${tz}</b>`,
+    tz_invalid: (input) => `❌ Ongeldige tijdzone: <b>${input}</b>`,
+    tz_examples: "Geldige voorbeelden:\n• <code>/timezone warsaw</code>\n• <code>/timezone Europe/Berlin</code>\n• <code>/timezone newyork</code>\n• <code>/timezone America/Los_Angeles</code>\n• <code>/timezone reset</code>",
+    settings_title: "⚙️ Nastavenia",
+    settings_open_panel: (url) => `Svoj jazyk a časové pásmo môžeš spravovať v paneli: <a href="${url}">${url}</a>`,
+    settings_hint: "Použij <code>/timezone</code> na zmenu časového pásma v Telegramu, alebo navštív stránku Nastavenia.",
   }
 };
 
 function getUserLang(user) {
-  return normalizeLangCode(user?.language_code || user?.lang || user?.language || "en");
+  return normalizeLangCode(user?.lang || user?.language_code || user?.language || "en");
 }
 
 function modePretty(lang, mode) {
@@ -1136,6 +1469,114 @@ async function handleLanguage(msg, user) {
   await tgSend(chatId, confirmTemplate(langName));
 }
 
+// ---------- handleTimezone ----------
+
+// Loose aliases for user-friendly timezone input
+const TIMEZONE_ALIASES = {
+  warsaw: "Europe/Warsaw",
+  london: "Europe/London",
+  berlin: "Europe/Berlin",
+  paris: "Europe/Paris",
+  amsterdam: "Europe/Amsterdam",
+  prague: "Europe/Prague",
+  vienna: "Europe/Vienna",
+  madrid: "Europe/Madrid",
+  rome: "Europe/Rome",
+  newyork: "America/New_York",
+  losangeles: "America/Los_Angeles",
+};
+
+function validateTimezone(tz) {
+  try {
+    // IANA validation via Intl.DateTimeFormat
+    Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function formatNowInTimezone(tz) {
+  const now = new Date();
+  return now.toLocaleString("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  });
+}
+
+async function handleTimezone(msg, user) {
+  const chatId = String(msg.chat.id);
+  const argText = (msg.text || "").trim().split(/\s+/).slice(1).join(" ").trim();
+  const arg = argText.toLowerCase();
+  const currentLang = getUserLang(user);
+  const t = CMD_I18N[currentLang] || CMD_I18N.en;
+
+  const currentTz = user.timezone || "Europe/Warsaw";
+
+  // No argument: show current timezone + formatted time + usage
+  if (!arg) {
+    const now = formatNowInTimezone(currentTz);
+    await tgSend(chatId, t.tz_current(currentTz, now) + "\n\n" + t.tz_usage);
+    return;
+  }
+
+  // Reset: set to default Europe/Warsaw
+  if (arg === "reset") {
+    const defaultTz = "Europe/Warsaw";
+    const result = await dbQuery(
+      `UPDATE users SET timezone = $1, updated_at = NOW() WHERE id = $2 RETURNING timezone`,
+      [defaultTz, user.id]
+    );
+    if (result.rowCount !== 1) {
+      await tgSend(chatId, "❌ Error saving timezone");
+      return;
+    }
+    const confirmedTz = result.rows[0].timezone;
+    await tgSend(chatId, t.tz_reset_ok(confirmedTz));
+    return;
+  }
+
+  // Resolve alias (warsaw -> Europe/Warsaw, etc.)
+  let resolvedTz = TIMEZONE_ALIASES[arg] || arg;
+
+  // Validate IANA timezone
+  if (!validateTimezone(resolvedTz)) {
+    await tgSend(chatId, t.tz_invalid(arg) + "\n\n" + t.tz_examples);
+    return;
+  }
+
+  // Save to users.timezone with RETURNING for confirmation
+  const result = await dbQuery(
+    `UPDATE users SET timezone = $1, updated_at = NOW() WHERE id = $2 RETURNING timezone`,
+    [resolvedTz, user.id]
+  );
+
+  // Validate exactly 1 row was updated
+  if (result.rowCount !== 1) {
+    await tgSend(chatId, "❌ Error saving timezone");
+    return;
+  }
+
+  // Use confirmed value from DB
+  const confirmedTz = result.rows[0].timezone;
+  await tgSend(chatId, t.tz_set_ok(confirmedTz));
+}
+async function handleSettings(msg, user) {
+  const chatId = String(msg.chat.id);
+  const currentLang = getUserLang(user);
+  const t = CMD_I18N[currentLang] || CMD_I18N.en;
+  const panelUrl = "https://panel.findyourdeal.app/settings";
+
+  const message = `${t.settings_title}\n\n${t.settings_open_panel(panelUrl)}\n\n${t.settings_hint}`;
+  await tgSend(chatId, message);
+}
+
 // ---------- cisza nocna ----------
 
 async function handleQuiet(msg) {
@@ -1183,71 +1624,244 @@ async function handleQuietOff(msg) {
   await tgSend(chatId, t.quietOff);
 }
 
-// ---------- /najnowsze ----------
+// ---------- /najnowsze /najtansze (wysłane do Telegrama) ----------
 
 async function handleNajnowsze(msg, user, argText) {
   const chatId = String(msg.chat.id);
+  const lang = getUserLang(user);
+  const t = CMD_I18N[lang] || CMD_I18N.en;
   const linkId = Number(argText);
+  const sinceChat = await fetchChatNotifyFrom(chatId, user.id);
 
-  if (!Number.isFinite(linkId) || linkId <= 0) {
-    await tgSend(chatId, "Użycie: <code>/najnowsze ID</code>\nnp. <code>/najnowsze 18</code>");
-    return;
-  }
+  if (Number.isFinite(linkId) && linkId > 0) {
+    const linkQ = await dbQuery(
+      `SELECT id, name, url, notify_from FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
+      [linkId, user.id]
+    );
 
-  // link musi należeć do usera
-  const chk = await dbQuery(
-    `SELECT id, name, url, source FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
-    [linkId, user.id]
-  );
-
-  if (!chk.rowCount) {
-    await tgSend(chatId, `Nie widzę linku <b>${linkId}</b> na Twoim koncie. Sprawdź <code>/lista</code>.`);
-    return;
-  }
-
-  const perLimit = getPerLinkItemLimit(user);
-
-  const itemsQ = await dbQuery(
-    `
-    SELECT title, price, currency, url, first_seen_at
-    FROM link_items
-    WHERE link_id = $1
-    ORDER BY first_seen_at DESC, id DESC
-    LIMIT $2
-    `,
-    [linkId, perLimit]
-  );
-
-  const linkRow = chk.rows[0];
-  const header = `🧾 Najnowsze oferty\n<b>${escapeHtml(linkRow.name || ("ID " + linkRow.id))}</b> <i>(ID ${linkRow.id})</i>\n`;
-
-  if (!itemsQ.rowCount) {
-    await tgSend(chatId, header + "\nBrak zapisanej historii dla tego linku (jeszcze).");
-    return;
-  }
-
-  // buduj wiadomość (limit długości Telegrama ~4096)
-  let out = header + "\n";
-  let i = 1;
-  for (const it of itemsQ.rows) {
-    const title = escapeHtml(it.title || "(bez tytułu)");
-    const priceStr =
-      it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
-    const line =
-      `${i}. <b>${title}</b>` +
-      (priceStr ? `\n💰 ${escapeHtml(priceStr)}` : "") +
-      (it.url ? `\n${escapeHtml(it.url)}` : "") +
-      "\n\n";
-
-    if ((out + line).length > 3800) {
-      out += "… (ucięto – limit długości wiadomości)\n";
-      break;
+    if (!linkQ.rowCount) {
+      await tgSend(chatId, `Nie widzę linku <b>${linkId}</b> na Twoim koncie. Sprawdź <code>/lista</code>.`);
+      return;
     }
-    out += line;
-    i++;
+
+    const linkRow = linkQ.rows[0];
+    const since = new Date(
+      Math.max(new Date(linkRow.notify_from || 0).getTime(), sinceChat.getTime())
+    );
+
+    const itemsQ = await dbQuery(
+      `
+      SELECT title, price, currency, url, sent_at
+      FROM sent_offers
+      WHERE user_id = $1 AND chat_id = $2 AND link_id = $3 AND sent_at >= $4
+      ORDER BY sent_at DESC
+      LIMIT 10
+      `,
+      [user.id, chatId, linkId, since]
+    );
+
+    if (!itemsQ.rowCount) {
+      await tgSend(chatId, t.histLatestNonePerLink(linkId, since));
+      return;
+    }
+
+    let out = t.histLatestPerLink(linkId, linkRow.name || "", since) + "\n\n";
+
+    itemsQ.rows.forEach((it, idx) => {
+      const title = escapeHtml(it.title || t.histNoTitle);
+      const priceStr =
+        it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
+
+      out += `${idx + 1}. <b>${title}</b>\n`;
+      if (priceStr) out += `💰 ${escapeHtml(priceStr)}\n`;
+      if (it.url) out += `${escapeHtml(it.url)}\n`;
+      out += `📅 ${formatDateTime(it.sent_at)}\n\n`;
+    });
+
+    await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
+    return;
+  }
+
+  const globalQ = await dbQuery(
+    `
+    SELECT so.link_id, so.title, so.price, so.currency, so.url, so.sent_at, l.name AS link_name
+    FROM sent_offers so
+    JOIN links l ON l.id = so.link_id
+    WHERE so.user_id = $1 AND so.chat_id = $2 AND so.sent_at >= $3
+    ORDER BY so.sent_at DESC
+    LIMIT 10
+    `,
+    [user.id, chatId, sinceChat]
+  );
+
+  if (!globalQ.rowCount) {
+    await tgSend(chatId, t.histLatestNone(sinceChat));
+    return;
+  }
+
+  let out = t.histLatestGlobal(sinceChat) + "\n\n";
+  const linkHints = new Set();
+
+  globalQ.rows.forEach((row, idx) => {
+    const priceStr =
+      row.price != null ? `${row.price} ${row.currency || ""}`.trim() : "";
+    out += `${idx + 1}. [${row.link_id}] ${escapeHtml(row.link_name || "(no name)")}\n`;
+    out += `<b>${escapeHtml(row.title || t.histNoTitle)}</b>\n`;
+    if (priceStr) out += `💰 ${escapeHtml(priceStr)}\n`;
+    if (row.url) out += `${escapeHtml(row.url)}\n`;
+    out += `📅 ${formatDateTime(row.sent_at)}\n\n`;
+    linkHints.add(row.link_id);
+  });
+
+  if (linkHints.size) {
+    out += `${t.histLatestFooter} ${[...linkHints]
+      .map((id) => `/najnowsze ${id}`)
+      .join(" ")}`;
   }
 
   await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
+}
+
+async function handleNajtansze(msg, user, argText) {
+  const chatId = String(msg.chat.id);
+  const lang = getUserLang(user);
+  const t = CMD_I18N[lang] || CMD_I18N.en;
+  const linkId = Number(argText);
+  const sinceChat = await fetchChatNotifyFrom(chatId, user.id);
+
+  if (Number.isFinite(linkId) && linkId > 0) {
+    const linkQ = await dbQuery(
+      `SELECT id, name, url, notify_from FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
+      [linkId, user.id]
+    );
+
+    if (!linkQ.rowCount) {
+      await tgSend(chatId, `Nie widzę linku <b>${linkId}</b> na Twoim koncie. Sprawdź <code>/lista</code>.`);
+      return;
+    }
+
+    const linkRow = linkQ.rows[0];
+    const since = new Date(
+      Math.max(new Date(linkRow.notify_from || 0).getTime(), sinceChat.getTime())
+    );
+
+    const itemsQ = await dbQuery(
+      `
+      SELECT title, price, currency, url, sent_at
+      FROM sent_offers
+      WHERE user_id = $1 AND chat_id = $2 AND link_id = $3 AND sent_at >= $4 AND price IS NOT NULL
+      ORDER BY price ASC NULLS LAST, sent_at DESC
+      LIMIT 10
+      `,
+      [user.id, chatId, linkId, since]
+    );
+
+    if (!itemsQ.rowCount) {
+      await tgSend(chatId, t.histCheapestNonePerLink(linkId, since));
+      return;
+    }
+
+    let out = t.histCheapestPerLink(linkId, linkRow.name || "", since) + "\n\n";
+
+    itemsQ.rows.forEach((it, idx) => {
+      const priceStr =
+        it.price != null ? `${it.price} ${it.currency || ""}`.trim() : "";
+
+      out += `${idx + 1}. <b>${escapeHtml(it.title || t.histNoTitle)}</b>\n`;
+      if (priceStr) out += `💰 ${escapeHtml(priceStr)}\n`;
+      if (it.url) out += `${escapeHtml(it.url)}\n`;
+      out += `📅 ${formatDateTime(it.sent_at)}\n\n`;
+    });
+
+    await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
+    return;
+  }
+
+  const globalQ = await dbQuery(
+    `
+    SELECT so.link_id, so.title, so.price, so.currency, so.url, so.sent_at, l.name AS link_name
+    FROM sent_offers so
+    JOIN links l ON l.id = so.link_id
+    WHERE so.user_id = $1 AND so.chat_id = $2 AND so.sent_at >= $3 AND so.price IS NOT NULL
+    ORDER BY so.price ASC NULLS LAST, so.sent_at DESC
+    LIMIT 10
+    `,
+    [user.id, chatId, sinceChat]
+  );
+
+  if (!globalQ.rowCount) {
+    await tgSend(chatId, t.histCheapestNone(sinceChat));
+    return;
+  }
+
+  let out = t.histCheapestGlobal(sinceChat) + "\n\n";
+  const linkHints = new Set();
+
+  globalQ.rows.forEach((row, idx) => {
+    const priceStr =
+      row.price != null ? `${row.price} ${row.currency || ""}`.trim() : "";
+    out += `${idx + 1}. [${row.link_id}] ${escapeHtml(row.link_name || "(no name)")}\n`;
+    out += `<b>${escapeHtml(row.title || t.histNoTitle)}</b>\n`;
+    if (priceStr) out += `💰 ${escapeHtml(priceStr)}\n`;
+    if (row.url) out += `${escapeHtml(row.url)}\n`;
+    out += `📅 ${formatDateTime(row.sent_at)}\n\n`;
+    linkHints.add(row.link_id);
+  });
+
+  if (linkHints.size) {
+    out += `${t.histFullHistory} ${[...linkHints]
+      .map((id) => `/najtansze ${id}`)
+      .join(" ")}`;
+  }
+
+  await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
+}
+
+// ---------- /admin_reset (tylko ADMIN_TG_ID) ----------
+
+async function handleAdminReset(msg, user, argText) {
+  const chatId = String(msg.chat.id);
+  const fromId = String(msg.from?.id || "");
+
+  if (!ADMIN_TG_ID || fromId !== ADMIN_TG_ID) {
+    await tgSend(chatId, "Brak uprawnień do tej komendy.");
+    return;
+  }
+
+  const targetTgId = (argText || "").trim();
+  if (!targetTgId) {
+    await tgSend(chatId, "Użycie: <code>/admin_reset &lt;tg_id&gt;</code>");
+    return;
+  }
+
+  const targetUserId = await getUserIdByTelegramId(targetTgId);
+  if (!targetUserId) {
+    await tgSend(chatId, `Nie znalazłem użytkownika o TG ID ${escapeHtml(targetTgId)}.`);
+    return;
+  }
+
+  const chatUpd = await dbQuery(
+    `
+    UPDATE chat_notifications
+    SET notify_from = NOW(), daily_count = 0, daily_count_date = CURRENT_DATE
+    WHERE user_id = $1
+    `,
+    [targetUserId]
+  );
+
+  const linkUpd = await dbQuery(
+    `
+    UPDATE links
+    SET notify_from = NOW()
+    WHERE user_id = $1
+    `,
+    [targetUserId]
+  );
+
+  await tgSend(
+    chatId,
+    `Reset wykonany dla tg_id=${escapeHtml(targetTgId)} (user_id=${targetUserId}).\nchat_rows=${chatUpd.rowCount} link_rows=${linkUpd.rowCount}`
+  );
 }
 
 // ---------- callback_query z przycisków (lnmode:ID:mode) ----------
@@ -1403,19 +2017,6 @@ await ensureUser(
   const command = commandRaw.toLowerCase().split("\@")[0];
   const argText = rest.join(" ").trim();
 
-
-  // komenda panel
-  if (command === "/panel") {
-    await handlePanel(msg, user);
-    return;
-  }
-
-  // komendy admina
-  if (command === "/admin_reset" || command === "/areset") {
-    await handleAdminReset(msg, user, argText);
-    return;
-  }
-
 // komendy per-link: /pojedyncze_18 /zbiorcze_18 /off_18 /on_18
 const perLink = command.match(/^\/(pojedyncze|zbiorcze|off|on)_(\d+)$/i);
 if (perLink) {
@@ -1437,12 +2038,6 @@ if (perLink) {
     }
 
     await clearLinkNotificationMode(user.id, String(chatId), linkId);
-
-    // reset notify_from dla tego konkretnego linku (zaczynam zbierać oferty od teraz)
-    await dbQuery(
-      `UPDATE links SET notify_from = NOW() WHERE id = $1 AND user_id = $2`,
-      [Number(linkId), Number(user.id)]
-    );
 
     // odczytaj domyślny tryb czatu (żeby ładnie potwierdzić)
     const cn = await dbQuery(
@@ -1492,8 +2087,18 @@ if (perLink) {
     await handleQuiet(msg);
   } else if (command.startsWith("/lang")) {
     await handleLanguage(msg, user, argText);
+  } else if (command.startsWith("/timezone") || command.startsWith("/tz") || command.startsWith("/strefa")) {
+    await handleTimezone(msg, user);
+  } else if (command.startsWith("/panel") || command.startsWith("/p")) {
+    await handlePanel(msg);
+  } else if (command.startsWith("/settings") || command.startsWith("/ustawienia")) {
+    await handleSettings(msg, user);
   } else if (command.startsWith("/najnowsze")) {
     await handleNajnowsze(msg, user, argText);
+  } else if (command.startsWith("/najtansze")) {
+    await handleNajtansze(msg, user, argText);
+  } else if (command.startsWith("/admin_reset")) {
+    await handleAdminReset(msg, user, argText);
   } else {
     await tgSend(chatId, "❓ Nieznana komenda. Użyj /help.");
   }

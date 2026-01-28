@@ -176,6 +176,49 @@ export async function initDb() {
       quiet_to SMALLINT NOT NULL DEFAULT 7
     );
   `);
+
+  // znacznik od którego liczymy historię wysyłek (globalnie dla czatu / per link)
+  await pool.query(`
+    ALTER TABLE chat_notifications
+    ADD COLUMN IF NOT EXISTS notify_from TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  `);
+
+  await pool.query(`
+    ALTER TABLE links
+    ADD COLUMN IF NOT EXISTS notify_from TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  `);
+
+  // historia faktycznie wysłanych ofert (SoT dla limitów i komend historii)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sent_offers (
+      id BIGSERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      chat_id TEXT NOT NULL,
+      link_id INTEGER NOT NULL,
+      item_id TEXT NOT NULL,
+      price NUMERIC NULL,
+      currency TEXT NULL,
+      title TEXT NULL,
+      url TEXT NULL,
+      sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (chat_id, link_id, item_id)
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS sent_offers_user_chat_sent_at_idx
+    ON sent_offers (user_id, chat_id, sent_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS sent_offers_user_link_sent_at_idx
+    ON sent_offers (user_id, link_id, sent_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS sent_offers_price_sort_idx
+    ON sent_offers (user_id, chat_id, sent_at DESC, price ASC);
+  `);
 }
 
 // =======================
@@ -210,7 +253,7 @@ export async function ensureUser(
       username = EXCLUDED.username,
       first_name = EXCLUDED.first_name,
       last_name = EXCLUDED.last_name,
-      language_code = COALESCE(users.language_code, EXCLUDED.language_code),
+      language_code = EXCLUDED.language_code,
       updated_at = NOW()
     RETURNING *;
     `,
@@ -257,37 +300,6 @@ export async function getUserWithPlanByTelegramId(tgId) {
     FROM user_entitlements_v ent
     JOIN users u ON u.id = ent.user_id
     WHERE ent.telegram_user_id = $1
-    LIMIT 1
-    `,
-    [tgNum]
-  );
-
-  return q.rows[0] || null;
-}
-
-export async function getUserEntitlementsByTelegramId(tgId) {
-  const tgNum = Number(tgId);
-  if (!Number.isFinite(tgNum)) return null;
-
-  // Zwraca uprawnienia z user_entitlements_v dla danego telegram_user_id
-  const q = await pool.query(
-    `SELECT
-      user_id,
-      telegram_user_id,
-      plan_code,
-      expires_at,
-      base_links_limit,
-      extra_links,
-      links_limit_total,
-      fast_slots,
-      refresh_normal_s,
-      refresh_fast_s,
-      group_chat_allowed,
-      plan_name,
-      history_limit_total,
-      daily_notifications_limit
-    FROM user_entitlements_v
-    WHERE telegram_user_id = $1
     LIMIT 1
     `,
     [tgNum]
