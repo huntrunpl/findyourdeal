@@ -911,6 +911,7 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
         u.plan_name,
         u.extra_link_packs,
         COALESCE(NULLIF(u.lang,''), 'en') AS lang,
+        u.timezone,
         qh.quiet_enabled,
         qh.quiet_from,
         qh.quiet_to
@@ -995,9 +996,23 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
         typeof row.quiet_from === "number" ? row.quiet_from : 22;
       const quietTo = typeof row.quiet_to === "number" ? row.quiet_to : 7;
 
-      if (quietEnabled && isHourInQuietRange(nowHour, quietFrom, quietTo)) {
+      // Oblicz godzinę w timezone użytkownika
+      const userTz = row.timezone || "Europe/Warsaw";
+      let userHour = nowHour;
+      try {
+        const userTime = new Date().toLocaleString("en-US", {
+          timeZone: userTz,
+          hour: "numeric",
+          hour12: false,
+        });
+        userHour = parseInt(userTime, 10);
+      } catch (e) {
+        logDebug(`[warn] link=${link.id} chat=${chatId} invalid timezone=${userTz}, using server hour`);
+      }
+
+      if (quietEnabled && isHourInQuietRange(userHour, quietFrom, quietTo)) {
         logDebug(
-          `[skip] link=${link.id} chat=${chatId} reason=quiet_hours nowHour=${nowHour} range=${quietFrom}-${quietTo}`
+          `[skip] link=${link.id} chat=${chatId} reason=quiet_hours userHour=${userHour} userTz=${userTz} range=${quietFrom}-${quietTo}`
         );
         continue;
       }

@@ -3,7 +3,6 @@ dotenv.config();
 
 import fetch from "node-fetch";
 import pg from "pg";
-import crypto from "crypto";
 
 import {
   initDb,
@@ -607,67 +606,18 @@ async function handleHelp(msg) {
   await tgSend(chatId, text);
 }
 
-// ---------- generatePanelToken ----------
-
-async function generatePanelToken(userId) {
-  const TOKEN_MINUTES = 10;
-  const token = crypto.randomBytes(32).toString("hex");
-  const expiresAt = new Date(Date.now() + TOKEN_MINUTES * 60 * 1000);
-
-  await pool.query(
-    `INSERT INTO panel_login_tokens (token, user_id, expires_at)
-     VALUES ($1, $2, $3)`,
-    [token, userId, expiresAt.toISOString()]
-  );
-
-  // Cleanup wygasłych tokenów (max 100)
-  await pool.query(
-    `DELETE FROM panel_login_tokens
-     WHERE token IN (
-       SELECT token FROM panel_login_tokens
-       WHERE expires_at < NOW() - INTERVAL '5 minutes'
-       ORDER BY created_at ASC
-       LIMIT 100
-     )`
-  );
-
-  return token;
-}
-
 // ---------- /panel ----------
 
 async function handlePanel(msg) {
   const chatId = msg.chat.id;
-  const tgId = msg.from?.id;
 
-  if (!tgId) {
-    await tgSend(chatId, "❌ Nie mogę zidentyfikować użytkownika.");
-    return;
-  }
+  const text =
+    "🧭 <b>Panel</b>\n\n" +
+    "Tu zarządzasz linkami i ustawieniami.\n\n" +
+    "Wejdź: <a href=\"https://panel.findyourdeal.app/links\">https://panel.findyourdeal.app/links</a>";
 
-  try {
-    const userId = await getUserIdByTelegramId(tgId);
-    if (!userId) {
-      await tgSend(chatId, "❌ Nie znaleziono użytkownika. Użyj /start aby się zarejestrować.");
-      return;
-    }
-
-    const token = await generatePanelToken(userId);
-    const tokenUrl = `https://panel.findyourdeal.app/api/auth/login?token=${token}`;
-
-    const text =
-      "🧭 <b>Panel</b>\n\n" +
-      "Link do panelu (ważny 10 minut, jednorazowy):\n\n" +
-      `<a href="${tokenUrl}">${tokenUrl}</a>\n\n` +
-      "⚠️ <i>Link jest ważny tylko przez 10 minut i można go użyć tylko raz.</i>";
-
-    await tgSend(chatId, text, { disable_web_page_preview: true });
-  } catch (err) {
-    console.error("handlePanel error:", err);
-    await tgSend(chatId, "❌ Błąd przy generowaniu linku do panelu.");
-  }
+  await tgSend(chatId, text);
 }
-
 
 // ---------- /panel ----------
 

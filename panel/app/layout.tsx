@@ -4,6 +4,7 @@ import "./globals.css";
 import getPanelLang from "./_lib/getPanelLang";
 import { LANGS } from "./_lib/i18n";
 import { getSessionUserId } from "../lib/auth";
+import TimezonePill from "./_components/TimezonePill";
 import { pool } from "../lib/db";
 
 const geistSans = Geist({
@@ -70,7 +71,7 @@ export default async function RootLayout({
       
       const linkQ = await pool.query(
         `SELECT COUNT(*)::int AS cnt
-         FROM searches
+         FROM links
          WHERE user_id = $1 AND active = true`,
         [sessionUserId]
       );
@@ -81,7 +82,7 @@ export default async function RootLayout({
         const expires = formatDate(ent.expires_at);
         const limit = ent.links_limit_total || 0;
         planPill = (
-          <div className="text-xs text-gray-600 border rounded px-2 py-1">
+          <div className="text-xs text-gray-600 dark:text-zinc-400 border dark:border-zinc-700 rounded px-2 py-1 bg-white dark:bg-zinc-800 whitespace-normal sm:whitespace-nowrap">
             plan: <b>{plan}</b>
             {expires && <> (do {expires})</>}
             {" · "}aktywne: <b>{enabledCount}/{limit}</b>
@@ -93,37 +94,58 @@ export default async function RootLayout({
     }
   }
   
+  // Build fingerprint
+  const buildId = process.env.BUILD_ID || "dev";
+
   return (
     <html lang={lang}>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         {/* Global Topbar - inline (YAGNI) */}
-        <div className="border-b bg-white sticky top-0 z-50">
-          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
-            {/* Left: Logo/Name */}
-            <div className="flex items-center gap-4">
-              <a href="/links" className="text-xl font-bold text-blue-600 hover:text-blue-700">
-                FindYourDeal
-              </a>
-            </div>
+        <div className="border-b bg-white dark:bg-zinc-900 dark:border-zinc-700 sticky top-0 z-50">
+          <div className="max-w-7xl mx-auto px-4 py-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              {/* Left: Logo + Build ID */}
+              <div className="flex items-center gap-4 w-full sm:w-auto">
+                <a href="/links" className="text-xl font-bold text-blue-600 hover:text-blue-700 dark:text-blue-400">
+                  FindYourDeal
+                </a>
+                <div className="text-xs text-gray-400 dark:text-zinc-500">
+                  Build: {buildId}
+                </div>
+              </div>
 
-            {/* Right: Plan pill + Language display + Settings link */}
-            <div className="flex items-center gap-3">
+              {/* Right: Pills + Links */}
+              <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto sm:justify-end">
               {/* Plan pill */}
               {planPill}
               
               {/* Static language label (read-only) */}
-              <div className="border rounded px-3 py-1.5 text-sm" title="Current language">
+              <div className="border dark:border-zinc-700 rounded px-3 py-1.5 text-sm text-black dark:text-white bg-white dark:bg-zinc-800 whitespace-normal sm:whitespace-nowrap truncate max-w-full" title="Current language">
                 {langDisplay}
               </div>
+
+              {/* Timezone pill */}
+              <TimezonePill />
+
+              {/* Billing link */}
+              <a 
+                href="/billing" 
+                className="border dark:border-zinc-700 rounded px-3 py-1.5 text-sm text-black dark:text-white bg-white dark:bg-zinc-800 hover:bg-gray-50 dark:hover:bg-zinc-700 whitespace-normal sm:whitespace-nowrap"
+                title="Billing"
+              >
+                💳 Billing
+              </a>
+
 
               {/* Settings link */}
               <a 
                 href="/settings" 
-                className="border rounded px-3 py-1.5 text-sm bg-blue-600 text-white hover:bg-blue-700"
+                className="border border-blue-600 rounded px-3 py-1.5 text-sm bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 whitespace-normal sm:whitespace-nowrap"
                 title="Settings"
               >
                 ⚙️ Ustawienia
               </a>
+              </div>
             </div>
           </div>
         </div>
