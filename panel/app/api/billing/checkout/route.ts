@@ -50,7 +50,8 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const { type, plan, addon } = body;
 
-    console.log(`[checkout][${requestId}] type=${type} plan=${plan} addon=${addon} userId=${sessionUserId}`);
+    console.log(`[checkout][${requestId}] START type=${type} plan=${plan} addon=${addon} userId=${sessionUserId}`);
+    console.log(`[checkout][${requestId}] Request body:`, JSON.stringify(body));
 
     // Get user data
     const userQ = await pool.query(
@@ -92,6 +93,7 @@ export async function POST(req: NextRequest) {
       }
 
       priceId = STRIPE_PRICE_IDS[plan as keyof typeof STRIPE_PRICE_IDS] || "";
+      console.log(`[checkout][${requestId}] Plan ${plan} → priceId=${priceId}`);
       if (!priceId) {
         console.error(`[checkout][${requestId}] Missing Stripe price ID for plan=${plan}. Check STRIPE_PRICE_${plan.toUpperCase()} ENV`);
         return NextResponse.json(
@@ -117,6 +119,7 @@ export async function POST(req: NextRequest) {
       }
 
       priceId = STRIPE_PRICE_IDS[addon as keyof typeof STRIPE_PRICE_IDS] || "";
+      console.log(`[checkout][${requestId}] Addon ${addon} → priceId=${priceId}`);
       if (!priceId) {
         console.error(`[checkout][${requestId}] Missing Stripe price ID for addon=${addon}. Available ENV: STRIPE_PRICE_ADDON_LINKS_10, STRIPE_PRICE_ADDON10, STRIPE_PRICE_ADDON`);
         return NextResponse.json(
@@ -137,8 +140,9 @@ export async function POST(req: NextRequest) {
     }
 
     // Create Stripe checkout session
+    console.log(`[checkout][${requestId}] Creating Stripe session: mode=subscription priceId=${priceId} quantity=${quantity}`);
     const session = await stripe.checkout.sessions.create({
-      mode: "payment",
+      mode: "subscription",
       line_items: [
         {
           price: priceId,
@@ -157,7 +161,7 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    console.log(`[checkout][${requestId}] Created Stripe session=${session.id} url=${session.url}`);
+    console.log(`[checkout][${requestId}] SUCCESS Created Stripe session=${session.id} url=${session.url}`);
 
     return NextResponse.json({
       url: session.url,
@@ -165,13 +169,19 @@ export async function POST(req: NextRequest) {
     });
 
   } catch (error) {
-    console.error(`[checkout][${requestId}] Error:`, error);
+    console.error(`[checkout][${requestId}] ERROR:`, error);
     const message = error instanceof Error ? error.message : "Unknown error";
+    const rawMessage = (error as any)?.raw?.message || "";
+    
+    console.error(`[checkout][${requestId}] Error message: ${message}`);
+    if (rawMessage) {
+      console.error(`[checkout][${requestId}] Stripe raw message: ${rawMessage}`);
+    }
     
     return NextResponse.json(
       { 
         error: "checkout_failed", 
-        message: `Nie udało się utworzyć sesji checkout: ${message}`, 
+        message: `Nie udało się utworzyć sesji checkout: ${message}${rawMessage ? ` (${rawMessage})` : ""}`, 
         requestId 
       },
       { status: 500 }

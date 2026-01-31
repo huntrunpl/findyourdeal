@@ -9,6 +9,6 @@ COPY panel/ ./
 RUN npm run build
 
 ENV NODE_ENV=production
-ENV BUILD_ID=20260131_141500
+ENV BUILD_ID=20260131_143000
 EXPOSE 3000
 CMD ["npm","run","start","--","-p","3000"]
