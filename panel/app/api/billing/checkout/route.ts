@@ -16,7 +16,7 @@ const STRIPE_PRICE_IDS = {
   starter: process.env.STRIPE_PRICE_STARTER || "",
   growth: process.env.STRIPE_PRICE_GROWTH || "",
   platinum: process.env.STRIPE_PRICE_PLATINUM || "",
-  links_10: process.env.STRIPE_PRICE_ADDON_LINKS_10 || "",
+  links_10: process.env.STRIPE_PRICE_ADDON_LINKS_10 || process.env.STRIPE_PRICE_ADDON10 || process.env.STRIPE_PRICE_ADDON || "",
 };
 
 function normalizePlan(code: any): "trial" | "starter" | "growth" | "platinum" {
@@ -93,9 +93,13 @@ export async function POST(req: NextRequest) {
 
       priceId = STRIPE_PRICE_IDS[plan as keyof typeof STRIPE_PRICE_IDS] || "";
       if (!priceId) {
-        console.error(`[checkout][${requestId}] Missing Stripe price ID for plan=${plan}`);
+        console.error(`[checkout][${requestId}] Missing Stripe price ID for plan=${plan}. Check STRIPE_PRICE_${plan.toUpperCase()} ENV`);
         return NextResponse.json(
-          { error: "config_error", message: `Brak konfiguracji dla planu ${plan}`, requestId },
+          { 
+            error: "missing_config", 
+            message: `Missing STRIPE_PRICE_${plan.toUpperCase()} for plan ${plan}. Please set environment variable.`, 
+            requestId 
+          },
           { status: 500 }
         );
       }
@@ -114,9 +118,13 @@ export async function POST(req: NextRequest) {
 
       priceId = STRIPE_PRICE_IDS[addon as keyof typeof STRIPE_PRICE_IDS] || "";
       if (!priceId) {
-        console.error(`[checkout][${requestId}] Missing Stripe price ID for addon=${addon}`);
+        console.error(`[checkout][${requestId}] Missing Stripe price ID for addon=${addon}. Available ENV: STRIPE_PRICE_ADDON_LINKS_10, STRIPE_PRICE_ADDON10, STRIPE_PRICE_ADDON`);
         return NextResponse.json(
-          { error: "config_error", message: `Brak konfiguracji dla dodatku ${addon}`, requestId },
+          { 
+            error: "missing_config", 
+            message: `Missing STRIPE_PRICE_ADDON_LINKS_10 (or STRIPE_PRICE_ADDON10) for addon ${addon}. Please set environment variable.`, 
+            requestId 
+          },
           { status: 500 }
         );
       }
