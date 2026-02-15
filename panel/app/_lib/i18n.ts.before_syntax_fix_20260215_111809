@@ -155,27 +155,6 @@ const DICT: Record<Lang, Record<string, string>> = {
       "You have an active {plan} plan. You can buy an add-on +10 links.",
     billing_buy_addon_btn: "Buy +10 links (1 click)",
     billing_after_payment: "After payment you will return to /billing/success.",
-    
-    // Addon pack section (Platinum users)
-    billing_addon_pack_title: "Add-on packs (+10 links)",
-    billing_addon_pack_desc: "You have the Platinum plan. Expand your link capacity with add-on packs.",
-    billing_addon_pack_b1: "Each pack adds +10 links to your account",
-    billing_addon_pack_b2: "Immediate activation after payment",
-    billing_addon_pack_b3: "Valid for the duration of your plan",
-    billing_addon_pack_note: "After payment you will return to /billing/success.",
-    billing_buy_addon: "Buy +10 links pack",
-    
-    // Upgrade section
-    billing_upgrade_title: "Upgrade your plan",
-    billing_upgrade_label: "Upgrade plan",
-    billing_current_plan_label: "Current plan:",
-    billing_after_click: "After clicking, you'll be redirected to Stripe checkout.",
-    
-    // Error messages
-    billing_error: "Error:",
-    billing_no_url: "No checkout URL received. Please try again.",
-    billing_loading: "Loading...",
-    
     notif_mode_label: "Mode:",
     notif_set_for_link: "(set for this link)",
     notif_inherit_from_chat: "(inherited from chat)",
@@ -230,6 +209,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     notif_off: "powiadomienia WYŁ.",
     notif_on: "powiadomienia WŁ.",
 
+    links_list_desc:
     settings_quiet_title: "🌙 Cisza nocna (brak powiadomień)",
     settings_quiet_desc: "Nie wysyłaj powiadomień w wybranych godzinach (w Twojej strefie czasowej)",
     settings_quiet_enable: "Włącz ciszę nocną",
@@ -245,6 +225,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     settings_notif_save: "Zapisz ustawienia powiadomień",
     settings_notif_saving: "Zapisywanie...",
     settings_back_to_search: "POWRÓT DO WYSZUKIWANIA",
+      "Lista Twoich linków monitorowanych przez bota oraz szybkie akcje.",
     search_label: "Szukaj (nazwa / URL)",
     only_enabled: "tylko włączone",
     filter_btn: "Filtruj",
@@ -287,27 +268,6 @@ const DICT: Record<Lang, Record<string, string>> = {
       "Masz aktywny plan {plan}. Możesz dokupić addon +10 linków.",
     billing_buy_addon_btn: "Dokup +10 linków (1 klik)",
     billing_after_payment: "Po płatności wrócisz na /billing/success.",
-    
-    // Addon pack section (użytkownicy Platinum)
-    billing_addon_pack_title: "Paczki dodatków (+10 linków)",
-    billing_addon_pack_desc: "Masz plan Platinum. Zwiększ liczbę linków dokupując paczki dodatków.",
-    billing_addon_pack_b1: "Każda paczka dodaje +10 linków do Twojego konta",
-    billing_addon_pack_b2: "Natychmiastowa aktywacja po płatności",
-    billing_addon_pack_b3: "Ważne przez cały okres Twojego planu",
-    billing_addon_pack_note: "Po płatności wrócisz na /billing/success.",
-    billing_buy_addon: "Kup paczkę +10 linków",
-    
-    // Sekcja upgrade
-    billing_upgrade_title: "Ulepsz swój plan",
-    billing_upgrade_label: "Zmień plan",
-    billing_current_plan_label: "Obecny plan:",
-    billing_after_click: "Po kliknięciu zostaniesz przekierowany do płatności Stripe.",
-    
-    // Komunikaty błędów
-    billing_error: "Błąd:",
-    billing_no_url: "Nie otrzymano adresu płatności. Spróbuj ponownie.",
-    billing_loading: "Ładowanie...",
-    
     notif_mode_label: "Tryb:",
     notif_set_for_link: "(ustawione dla linku)",
     notif_inherit_from_chat: "(dziedziczy z czatu)",
@@ -418,27 +378,6 @@ const DICT: Record<Lang, Record<string, string>> = {
       "Du hast einen aktiven {plan}-Tarif. Du kannst ein Add-on +10 Links kaufen.",
     billing_buy_addon_btn: "+10 Links kaufen (1 Klick)",
     billing_after_payment: "Nach der Zahlung wirst du zu /billing/success zurückgeleitet.",
-    
-    // Addon pack section (Platinum users)
-    billing_addon_pack_title: "Add-on-Pakete (+10 Links)",
-    billing_addon_pack_desc: "Du hast den Platinum-Tarif. Erweitere deine Link-Kapazität mit Add-on-Paketen.",
-    billing_addon_pack_b1: "Jedes Paket fügt +10 Links zu deinem Konto hinzu",
-    billing_addon_pack_b2: "Sofortige Aktivierung nach Zahlung",
-    billing_addon_pack_b3: "Gültig für die Dauer deines Tarifs",
-    billing_addon_pack_note: "Nach der Zahlung wirst du zu /billing/success zurückgeleitet.",
-    billing_buy_addon: "+10 Links Paket kaufen",
-    
-    // Upgrade section
-    billing_upgrade_title: "Tarif upgraden",
-    billing_upgrade_label: "Tarif wechseln",
-    billing_current_plan_label: "Aktueller Tarif:",
-    billing_after_click: "Nach dem Klicken wirst du zum Stripe-Checkout weitergeleitet.",
-    
-    // Error messages
-    billing_error: "Fehler:",
-    billing_no_url: "Keine Checkout-URL erhalten. Bitte versuche es erneut.",
-    billing_loading: "Lädt...",
-    
     notif_mode_label: "Modus:",
     notif_set_for_link: "(für diesen Link gesetzt)",
     notif_inherit_from_chat: "(vom Chat geerbt)",
@@ -553,27 +492,6 @@ const DICT: Record<Lang, Record<string, string>> = {
     billing_buy_addon_btn: "Acheter +10 liens (1 clic)",
     billing_after_payment:
       "Après le paiement, vous serez redirigé vers /billing/success.",
-    
-    // Addon pack section (Platinum users)
-    billing_addon_pack_title: "Packs complémentaires (+10 liens)",
-    billing_addon_pack_desc: "Vous avez le forfait Platinum. Élargissez votre capacité de liens avec des packs complémentaires.",
-    billing_addon_pack_b1: "Chaque pack ajoute +10 liens à votre compte",
-    billing_addon_pack_b2: "Activation immédiate après paiement",
-    billing_addon_pack_b3: "Valable pendant toute la durée de votre forfait",
-    billing_addon_pack_note: "Après le paiement, vous reviendrez sur /billing/success.",
-    billing_buy_addon: "Acheter un pack +10 liens",
-    
-    // Upgrade section
-    billing_upgrade_title: "Améliorez votre forfait",
-    billing_upgrade_label: "Changer de forfait",
-    billing_current_plan_label: "Forfait actuel:",
-    billing_after_click: "Après avoir cliqué, vous serez redirigé vers la caisse Stripe.",
-    
-    // Error messages
-    billing_error: "Erreur:",
-    billing_no_url: "URL de paiement non reçue. Veuillez réessayer.",
-    billing_loading: "Chargement...",
-    
     notif_mode_label: "Mode :",
     notif_set_for_link: "(défini pour ce lien)",
     notif_inherit_from_chat: "(hérité du chat)",
@@ -687,27 +605,6 @@ const DICT: Record<Lang, Record<string, string>> = {
       "Tienes un plan {plan} activo. Puedes comprar un extra +10 enlaces.",
     billing_buy_addon_btn: "Comprar +10 enlaces (1 clic)",
     billing_after_payment: "Después del pago volverás a /billing/success.",
-    
-    // Addon pack section (Platinum users)
-    billing_addon_pack_title: "Paquetes adicionales (+10 enlaces)",
-    billing_addon_pack_desc: "Tienes el plan Platinum. Amplía tu capacidad de enlaces con paquetes adicionales.",
-    billing_addon_pack_b1: "Cada paquete añade +10 enlaces a tu cuenta",
-    billing_addon_pack_b2: "Activación inmediata después del pago",
-    billing_addon_pack_b3: "Válido durante la duración de tu plan",
-    billing_addon_pack_note: "Después del pago volverás a /billing/success.",
-    billing_buy_addon: "Comprar paquete +10 enlaces",
-    
-    // Upgrade section
-    billing_upgrade_title: "Mejora tu plan",
-    billing_upgrade_label: "Cambiar plan",
-    billing_current_plan_label: "Plan actual:",
-    billing_after_click: "Después de hacer clic, serás redirigido al pago de Stripe.",
-    
-    // Error messages
-    billing_error: "Error:",
-    billing_no_url: "No se recibió URL de pago. Inténtalo de nuevo.",
-    billing_loading: "Cargando...",
-    
     notif_mode_label: "Modo:",
     notif_set_for_link: "(configurado para este enlace)",
     notif_inherit_from_chat: "(heredado del chat)",
@@ -821,27 +718,6 @@ const DICT: Record<Lang, Record<string, string>> = {
       "Hai un piano {plan} attivo. Puoi acquistare un extra +10 link.",
     billing_buy_addon_btn: "Acquista +10 link (1 clic)",
     billing_after_payment: "Dopo il pagamento tornerai su /billing/success.",
-    
-    // Addon pack section (Platinum users)
-    billing_addon_pack_title: "Pacchetti aggiuntivi (+10 link)",
-    billing_addon_pack_desc: "Hai il piano Platinum. Espandi la tua capacità di link con pacchetti aggiuntivi.",
-    billing_addon_pack_b1: "Ogni pacchetto aggiunge +10 link al tuo account",
-    billing_addon_pack_b2: "Attivazione immediata dopo il pagamento",
-    billing_addon_pack_b3: "Valido per la durata del tuo piano",
-    billing_addon_pack_note: "Dopo il pagamento tornerai su /billing/success.",
-    billing_buy_addon: "Acquista pacchetto +10 link",
-    
-    // Upgrade section
-    billing_upgrade_title: "Aggiorna il tuo piano",
-    billing_upgrade_label: "Cambia piano",
-    billing_current_plan_label: "Piano attuale:",
-    billing_after_click: "Dopo aver cliccato, sarai reindirizzato al checkout Stripe.",
-    
-    // Error messages
-    billing_error: "Errore:",
-    billing_no_url: "URL di pagamento non ricevuto. Riprova.",
-    billing_loading: "Caricamento...",
-    
     notif_mode_label: "Modalità:",
     notif_set_for_link: "(impostato per questo link)",
     notif_inherit_from_chat: "(ereditato dalla chat)",
@@ -955,27 +831,6 @@ const DICT: Record<Lang, Record<string, string>> = {
       "Você tem um plano {plan} ativo. Pode comprar um extra +10 links.",
     billing_buy_addon_btn: "Comprar +10 links (1 clique)",
     billing_after_payment: "Após o pagamento, voltará a /billing/success.",
-    
-    // Addon pack section (Platinum users)
-    billing_addon_pack_title: "Pacotes adicionais (+10 links)",
-    billing_addon_pack_desc: "Você tem o plano Platinum. Expanda sua capacidade de links com pacotes adicionais.",
-    billing_addon_pack_b1: "Cada pacote adiciona +10 links à sua conta",
-    billing_addon_pack_b2: "Ativação imediata após pagamento",
-    billing_addon_pack_b3: "Válido durante a duração do seu plano",
-    billing_addon_pack_note: "Após o pagamento, voltará a /billing/success.",
-    billing_buy_addon: "Comprar pacote +10 links",
-    
-    // Upgrade section
-    billing_upgrade_title: "Atualize seu plano",
-    billing_upgrade_label: "Alterar plano",
-    billing_current_plan_label: "Plano atual:",
-    billing_after_click: "Após clicar, será redirecionado para o checkout Stripe.",
-    
-    // Error messages
-    billing_error: "Erro:",
-    billing_no_url: "URL de pagamento não recebida. Tente novamente.",
-    billing_loading: "Carregando...",
-    
     notif_mode_label: "Modo:",
     notif_set_for_link: "(definido para este link)",
     notif_inherit_from_chat: "(herdado do chat)",
@@ -1196,27 +1051,6 @@ const DICT: Record<Lang, Record<string, string>> = {
       "Je hebt een actief {plan}-plan. Je kunt een add-on +10 links kopen.",
     billing_buy_addon_btn: "+10 links kopen (1 klik)",
     billing_after_payment: "Na betaling ga je terug naar /billing/success.",
-    
-    // Addon pack section (Platinum users)
-    billing_addon_pack_title: "Add-on pakketten (+10 links)",
-    billing_addon_pack_desc: "Je hebt het Platinum plan. Breid je linkcapaciteit uit met add-on pakketten.",
-    billing_addon_pack_b1: "Elk pakket voegt +10 links toe aan je account",
-    billing_addon_pack_b2: "Onmiddellijke activering na betaling",
-    billing_addon_pack_b3: "Geldig voor de duur van je plan",
-    billing_addon_pack_note: "Na betaling ga je terug naar /billing/success.",
-    billing_buy_addon: "+10 links pakket kopen",
-    
-    // Upgrade section
-    billing_upgrade_title: "Upgrade je plan",
-    billing_upgrade_label: "Abonnement wijzigen",
-    billing_current_plan_label: "Huidig plan:",
-    billing_after_click: "Na het klikken word je doorgestuurd naar Stripe checkout.",
-    
-    // Error messages
-    billing_error: "Fout:",
-    billing_no_url: "Geen betaal-URL ontvangen. Probeer het opnieuw.",
-    billing_loading: "Laden...",
-    
     notif_mode_label: "Modus:",
     notif_set_for_link: "(ingesteld voor deze link)",
     notif_inherit_from_chat: "(overgenomen van chat)",
@@ -1327,27 +1161,6 @@ const DICT: Record<Lang, Record<string, string>> = {
       "Máš aktivní plán {plan}. Můžeš dokoupit doplněk +10 odkazů.",
     billing_buy_addon_btn: "Dokoupit +10 odkazů (1 klik)",
     billing_after_payment: "Po platbě se vrátíš na /billing/success.",
-    
-    // Addon pack section (Platinum users)
-    billing_addon_pack_title: "Doplňkové balíčky (+10 odkazů)",
-    billing_addon_pack_desc: "Máš Platinum plán. Rozšiř svou kapacitu odkazů doplňkovými balíčky.",
-    billing_addon_pack_b1: "Každý balíček přidá +10 odkazů k tvému účtu",
-    billing_addon_pack_b2: "Okamžitá aktivace po platbě",
-    billing_addon_pack_b3: "Platné po dobu trvání tvého plánu",
-    billing_addon_pack_note: "Po platbě se vrátíš na /billing/success.",
-    billing_buy_addon: "Koupit balíček +10 odkazů",
-    
-    // Upgrade section
-    billing_upgrade_title: "Upgraduj svůj plán",
-    billing_upgrade_label: "Změnit tarif",
-    billing_current_plan_label: "Aktuální tarif:",
-    billing_after_click: "Po kliknutí budeš přesměrován na Stripe checkout.",
-    
-    // Error messages
-    billing_error: "Chyba:",
-    billing_no_url: "Nebyla přijata URL platby. Zkus to znovu.",
-    billing_loading: "Načítání...",
-    
     notif_mode_label: "Režim:",
     notif_set_for_link: "(nastaveno pro tento odkaz)",
     notif_inherit_from_chat: "(zděděno z chatu)",
@@ -1458,27 +1271,6 @@ const DICT: Record<Lang, Record<string, string>> = {
       "Máš aktívny plán {plan}. Môžeš dokúpiť doplnok +10 linkov.",
     billing_buy_addon_btn: "Dokúpiť +10 linkov (1 klik)",
     billing_after_payment: "Po platbe sa vrátiš na /billing/success.",
-    
-    // Addon pack section (Platinum users)
-    billing_addon_pack_title: "Doplnkové balíky (+10 linkov)",
-    billing_addon_pack_desc: "Máš Platinum plán. Rozšír svoju kapacitu linkov doplnkovými balíkmi.",
-    billing_addon_pack_b1: "Každý balík pridá +10 linkov k tvojmu účtu",
-    billing_addon_pack_b2: "Okamžitá aktivácia po platbe",
-    billing_addon_pack_b3: "Platné po dobu trvania tvojho plánu",
-    billing_addon_pack_note: "Po platbe sa vrátiš na /billing/success.",
-    billing_buy_addon: "Kúpiť balík +10 linkov",
-    
-    // Upgrade section
-    billing_upgrade_title: "Upgraduj svoj plán",
-    billing_upgrade_label: "Zmeniť plán",
-    billing_current_plan_label: "Aktuálny plán:",
-    billing_after_click: "Po kliknutí budeš presmerovaný na Stripe checkout.",
-    
-    // Error messages
-    billing_error: "Chyba:",
-    billing_no_url: "Nebola prijatá URL platby. Skús to znovu.",
-    billing_loading: "Načítava sa...",
-    
     notif_mode_label: "Režim:",
     notif_set_for_link: "(nastavené pre tento odkaz)",
     notif_inherit_from_chat: "(zdedené z chatu)",

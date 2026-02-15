@@ -9,13 +9,13 @@ export async function GET() {
   }
 
   try {
-    // Get user's telegram_chat_id
+    // Get user's chat_id (telegram_chat_id OR telegram_user_id for private chats)
     const userRes = await pool.query(
-      "SELECT telegram_chat_id FROM users WHERE id = $1",
+      "SELECT COALESCE(telegram_chat_id::text, telegram_user_id::text) as chat_id FROM users WHERE id = $1",
       [userId]
     );
 
-    if (!userRes.rows.length || !userRes.rows[0].telegram_chat_id) {
+    if (!userRes.rows.length || !userRes.rows[0].chat_id) {
       // No chat_id yet - return defaults
       return NextResponse.json({
         enabled: true,
@@ -23,7 +23,7 @@ export async function GET() {
       });
     }
 
-    const chatId = String(userRes.rows[0].telegram_chat_id);
+    const chatId = String(userRes.rows[0].chat_id);
 
     // Get notification settings from chat_notifications
     const notifRes = await pool.query(
@@ -83,54 +83,49 @@ export async function POST(req: Request) {
   }
 
   try {
-    // Get user's telegram_chat_id
+    // Get user's chat_id (telegram_chat_id OR telegram_user_id for private chats)
     const userRes = await pool.query(
-      "SELECT telegram_chat_id FROM users WHERE id = $1",
+      "SELECT COALESCE(telegram_chat_id::text, telegram_user_id::text) as chat_id FROM users WHERE id = $1",
       [userId]
     );
 
-    if (!userRes.rows.length || !userRes.rows[0].telegram_chat_id) {
+    if (!userRes.rows.length || !userRes.rows[0].chat_id) {
       return NextResponse.json(
         { error: "No Telegram chat linked" },
         { status: 400 }
       );
     }
 
-    const chatId = String(userRes.rows[0].telegram_chat_id);
+    const chatId = String(userRes.rows[0].chat_id);
 
-    // Build update query dynamically
-    const updates: string[] = [];
-    const values: any[] = [chatId];
-    let paramIndex = 2;
+    // Use provided values or defaults
+    const finalEnabled = enabled !== undefined ? enabled : true;
+    const finalMode = mode || "single";
 
-    if (enabled !== undefined) {
-      updates.push(`enabled = $${paramIndex}`);
-      values.push(enabled);
-      paramIndex++;
-    }
-    if (mode !== undefined) {
-      updates.push(`mode = $${paramIndex}`);
-      values.push(mode);
-      paramIndex++;
-    }
-
-    if (updates.length === 0) {
-      return NextResponse.json({ success: true });
-    }
-
-    // Upsert chat_notifications
+    // Upsert chat_notifications with correct SQL
     await pool.query(
-      `INSERT INTO chat_notifications (chat_id, user_id, enabled, mode)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO chat_notifications (chat_id, user_id, enabled, mode, updated_at)
+       VALUES ($1, $2, $3, $4, now())
        ON CONFLICT (chat_id, user_id)
-       DO UPDATE SET ${updates.join(", ")}, updated_at = now()`,
-      [chatId, userId, enabled ?? true, mode ?? "single"]
+       DO UPDATE SET
+         enabled = EXCLUDED.enabled,
+         mode = EXCLUDED.mode,
+         updated_at = now()`,
+      [chatId, userId, finalEnabled, finalMode]
     );
+
+    // Read back from DB to confirm
+    const confirmRes = await pool.query(
+      "SELECT enabled, mode FROM chat_notifications WHERE chat_id = $1 AND user_id = $2",
+      [chatId, userId]
+    );
+
+    const saved = confirmRes.rows[0];
 
     return NextResponse.json({
       success: true,
-      enabled: enabled ?? true,
-      mode: mode ?? "single"
+      enabled: !!saved.enabled,
+      mode: saved.mode || "single"
     });
   } catch (error) {
     console.error("[notifications POST]", error);

@@ -536,6 +536,7 @@ export async function getLinksForWorker() {
     SELECT id, user_id, name, url, source, active, chat_id, thread_id, last_key, filters
     FROM links
     WHERE active = TRUE
+      AND (hidden IS NULL OR hidden = false)
     ORDER BY id ASC
     `
   );

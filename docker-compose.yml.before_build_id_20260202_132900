@@ -104,7 +104,6 @@ services:
       - db
     environment:
       - NODE_OPTIONS=--unhandled-rejections=warn
-      - BUILD_ID=20260202_133000
     healthcheck:
       test: ["CMD", "pgrep", "-f", "telegram-bot.js"]
       interval: 30s

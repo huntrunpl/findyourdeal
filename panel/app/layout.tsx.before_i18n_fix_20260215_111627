@@ -7,9 +7,6 @@ import { getSessionUserId } from "../lib/auth";
 import TimezonePill from "./_components/TimezonePill";
 import { pool } from "../lib/db";
 
-// Force dynamic rendering - don't cache language/user data
-export const dynamic = "force-dynamic";
-
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
@@ -21,8 +18,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "FindYourDeal – Client Panel",
-  description: "FindYourDeal client panel: manage searches and notifications.",
+  title: "FindYourDeal – Panel klienta",
+  description: "Panel klienta FindYourDeal: zarządzanie wyszukiwaniami i powiadomieniami.",
 };
 
 function formatDate(dt: any) {
@@ -86,9 +83,9 @@ export default async function RootLayout({
         const limit = ent.links_limit_total || 0;
         planPill = (
           <div className="text-xs text-gray-600 dark:text-zinc-400 border dark:border-zinc-700 rounded px-2 py-1 bg-white dark:bg-zinc-800 whitespace-normal sm:whitespace-nowrap">
-            {t(lang, "plan_lower")} <b>{plan}</b>
-            {expires && <> ({t(lang, "until_prefix")} {expires})</>}
-            {" · "}{t(lang, "active_lower")} <b>{enabledCount}/{limit}</b>
+            plan: <b>{plan}</b>
+            {expires && <> (do {expires})</>}
+            {" · "}aktywne: <b>{enabledCount}/{limit}</b>
           </div>
         );
       }

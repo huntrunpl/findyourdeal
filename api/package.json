@@ -4,7 +4,8 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "i18n:check": "node i18n-check.js"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

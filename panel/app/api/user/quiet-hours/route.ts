@@ -9,13 +9,13 @@ export async function GET() {
   }
 
   try {
-    // Get user's telegram_chat_id
+    // Get user's chat_id (telegram_chat_id OR telegram_user_id for private chats)
     const userRes = await pool.query(
-      "SELECT telegram_chat_id FROM users WHERE id = $1",
+      "SELECT COALESCE(telegram_chat_id::text, telegram_user_id::text) as chat_id FROM users WHERE id = $1",
       [userId]
     );
 
-    if (!userRes.rows.length || !userRes.rows[0].telegram_chat_id) {
+    if (!userRes.rows.length || !userRes.rows[0].chat_id) {
       // No chat_id yet - return defaults
       return NextResponse.json({
         enabled: false,
@@ -24,7 +24,7 @@ export async function GET() {
       });
     }
 
-    const chatId = String(userRes.rows[0].telegram_chat_id);
+    const chatId = String(userRes.rows[0].chat_id);
 
     // Get quiet hours from chat_quiet_hours
     const qhRes = await pool.query(
@@ -102,30 +102,30 @@ export async function POST(req: Request) {
   }
 
   try {
-    // Get user's telegram_chat_id
+    // Get user's chat_id (telegram_chat_id OR telegram_user_id for private chats)
     const userRes = await pool.query(
-      "SELECT telegram_chat_id FROM users WHERE id = $1",
+      "SELECT COALESCE(telegram_chat_id::text, telegram_user_id::text) as chat_id FROM users WHERE id = $1",
       [userId]
     );
 
-    if (!userRes.rows.length || !userRes.rows[0].telegram_chat_id) {
+    if (!userRes.rows.length || !userRes.rows[0].chat_id) {
       return NextResponse.json(
         { error: "No Telegram chat linked" },
         { status: 400 }
       );
     }
 
-    const chatId = String(userRes.rows[0].telegram_chat_id);
+    const chatId = String(userRes.rows[0].chat_id);
 
-    // Upsert chat_quiet_hours
+    // Upsert chat_quiet_hours with EXCLUDED to avoid type issues
     await pool.query(
       `INSERT INTO chat_quiet_hours (chat_id, quiet_enabled, quiet_from, quiet_to)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (chat_id)
        DO UPDATE SET
-         quiet_enabled = $2,
-         quiet_from = $3,
-         quiet_to = $4`,
+         quiet_enabled = EXCLUDED.quiet_enabled,
+         quiet_from = EXCLUDED.quiet_from,
+         quiet_to = EXCLUDED.quiet_to`,
       [chatId, enabled, start, end]
     );
 

@@ -136,16 +136,16 @@ export default async function LinksPage({ searchParams }: { searchParams: SP }) 
   const limitTotal = Number(ent?.links_limit_total ?? 0);
 
   return (
-    <main className="p-6 space-y-6 bg-white dark:bg-zinc-950 min-h-screen">
-      <h1 className="text-2xl font-semibold text-black dark:text-white">{t(lang,"links_title")}</h1>
+    <main className="p-6 space-y-6">
+      <h1 className="text-2xl font-semibold">{t(lang,"links_title")}</h1>
 
 
-      <section className="border dark:border-zinc-700 rounded p-4 space-y-2 bg-white dark:bg-zinc-900">
-        <h2 className="font-semibold text-black dark:text-white">{t(lang,"tg_commands_title")}</h2>
-        <div className="text-sm opacity-80 text-black dark:text-white">
+      <section className="border rounded p-4 space-y-2">
+        <h2 className="font-semibold">{t(lang,"tg_commands_title")}</h2>
+        <div className="text-sm opacity-80">
           {L.tg_commands_desc}
         </div>
-        <ul className="text-sm list-disc pl-5 space-y-1 text-black dark:text-white">
+        <ul className="text-sm list-disc pl-5 space-y-1">
           <li>{L.tg_cmd_status}</li>
           <li>{L.tg_cmd_add}</li>
           <li>{L.tg_cmd_list}</li>
@@ -155,14 +155,18 @@ export default async function LinksPage({ searchParams }: { searchParams: SP }) 
           <li>{L.tg_cmd_mode_id}</li>
         </ul>
 
-        <div className="text-xs opacity-70 pt-2 text-black dark:text-white">
+
+        {process.env.PANEL_SHOW_CHAT_STATUS === "1" && (
+          <>
+        <div className="text-xs opacity-70 pt-2">
           {L.chat_status_prefix}{" "}
           {primaryChatId ? (
             <>
-              <b>{chatEnabled ? t(lang,"notif_on") : t(lang,"notif_off")}</b>{" "}
-              · {L.chat_mode_prefix} <b>{modeLabel(lang, chatMode)}</b>
+              <b>{chatEnabled ? L.chat_status_on : L.chat_status_off}</b>
+              {" · "}
+              {L.chat_mode_label} <b>{modeLabel(lang, chatMode)}</b>
               {!chatEnabled ? (
-                <> · {L.notif_hint_off}</>
+                <>{" · "}{L.chat_enable_hint}</>
               ) : null}
             </>
           ) : (
@@ -171,34 +175,37 @@ export default async function LinksPage({ searchParams }: { searchParams: SP }) 
             </>
           )}
         </div>
+          </>
+        )}
+
       </section>
 
       <div className="flex items-end justify-between gap-4 flex-wrap">
-        <p className="text-sm opacity-70 text-black dark:text-white">
+        <p className="text-sm opacity-70">
           {L.links_list_desc}
         </p>
 
         <form method="get" className="flex gap-2 flex-wrap items-end">
           <div className="flex flex-col">
-            <label className="text-xs opacity-70 text-black dark:text-white">{t(lang,"search_label")}</label>
-            <input name="q" defaultValue={q} className="border dark:border-zinc-700 rounded px-3 py-2 w-72 bg-white dark:bg-zinc-800 text-black dark:text-white" />
+            <label className="text-xs opacity-70">{t(lang,"search_label")}</label>
+            <input name="q" defaultValue={q} className="border rounded px-3 py-2 w-72" />
           </div>
 
-          <label className="flex items-center gap-2 text-sm mb-2 text-black dark:text-white">
+          <label className="flex items-center gap-2 text-sm mb-2">
             <input type="checkbox" name="active" value="1" defaultChecked={onlyActive} />
             {L.only_enabled}
           </label>
 
-          <button className="border dark:border-zinc-700 rounded px-3 py-2 bg-white dark:bg-zinc-800 text-black dark:text-white hover:bg-gray-50 dark:hover:bg-zinc-700">{t(lang,"filter_btn")}</button>
-          <a className="border dark:border-zinc-700 rounded px-3 py-2 bg-white dark:bg-zinc-800 text-black dark:text-white hover:bg-gray-50 dark:hover:bg-zinc-700" href="/links">
+          <button className="border rounded px-3 py-2">{t(lang,"filter_btn")}</button>
+          <a className="border rounded px-3 py-2" href="/links">
             {L.clear_btn}
           </a>
         </form>
       </div>
 
-      <div className="overflow-auto border dark:border-zinc-700 rounded bg-white dark:bg-zinc-900">
-        <table className="min-w-[1320px] w-full text-sm text-black dark:text-white">
-          <thead className="bg-gray-50 dark:bg-zinc-800">
+      <div className="overflow-auto border rounded">
+        <table className="min-w-[1320px] w-full text-sm">
+          <thead className="bg-gray-50">
             <tr className="text-left">
               <th className="p-3">{L.col_id}</th>
               <th className="p-3">{L.col_status}</th>
@@ -248,14 +255,14 @@ export default async function LinksPage({ searchParams }: { searchParams: SP }) 
               const inheritClass = `border rounded px-2 py-1 ${perLink ? "opacity-60" : ""}`;
 
               return (
-                <tr key={r.id} className="border-t dark:border-zinc-700 align-top hover:bg-gray-50 dark:hover:bg-zinc-800/50">
+                <tr key={r.id} className="border-t align-top">
                   <td className="p-3 font-mono">{r.id}</td>
 
                   <td className="p-3">
                     <form action={toggleLinkActive}>
                       <input type="hidden" name="id" value={r.id} />
                       <input type="hidden" name="active" value={String(r.active)} />
-                      <button className={`px-2 py-1 rounded border dark:border-zinc-700 bg-white dark:bg-zinc-800 text-black dark:text-white hover:bg-gray-50 dark:hover:bg-zinc-700 ${r.active ? "" : "opacity-60"}`}>
+                      <button className={`px-2 py-1 rounded border ${r.active ? "" : "opacity-60"}`}>
                         {r.active ? t(lang, "status_on_short") : t(lang, "status_off_short")}
                       </button>
                     </form>
@@ -354,7 +361,7 @@ export default async function LinksPage({ searchParams }: { searchParams: SP }) 
                   <td className="p-3">
                     <form action={resetBaseline}>
                       <input type="hidden" name="id" value={r.id} />
-                      <button className="border dark:border-zinc-700 rounded px-2 py-1 bg-white dark:bg-zinc-800 text-black dark:text-white hover:bg-gray-50 dark:hover:bg-zinc-700">{t(lang,"reset_btn")}</button>
+                      <button className="border rounded px-2 py-1">{t(lang,"reset_btn")}</button>
                     </form>
                   </td>
                 </tr>

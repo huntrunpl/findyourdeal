@@ -308,6 +308,11 @@ export async function getUserWithPlanByTelegramId(tgId) {
   return q.rows[0] || null;
 }
 
+// Alias for getUserWithPlanByTelegramId (used by panel-dev-auth and status command)
+export async function getUserEntitlementsByTelegramId(tgId) {
+  return getUserWithPlanByTelegramId(tgId);
+}
+
 export async function setUserTelegramChatId(userId, chatId) {
   const uid = Number(userId);
   const cid = Number(chatId);
@@ -354,6 +359,33 @@ export async function clearLinkNotificationMode(userId, chatId, linkId) {
     `DELETE FROM link_notification_modes WHERE user_id=$1 AND chat_id=$2 AND link_id=$3`,
     [Number(userId), String(chatId), Number(linkId)]
   );
+}
+
+export async function resetLinkOverridesForUserId(linkId, userId, chatId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    // 1. Usuń per-link mode override
+    await client.query(
+      `DELETE FROM link_notification_modes WHERE user_id=$1 AND chat_id=$2 AND link_id=$3`,
+      [Number(userId), String(chatId), Number(linkId)]
+    );
+    
+    // 2. Reset notify_from (zaczynamy zbierać oferty od teraz)
+    const res = await client.query(
+      `UPDATE links SET notify_from = NOW() WHERE id = $1 AND user_id = $2 RETURNING id, name, url`,
+      [Number(linkId), Number(userId)]
+    );
+    
+    await client.query('COMMIT');
+    return res.rows[0] || null;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function getUserById(userId) {
@@ -472,6 +504,7 @@ export async function getLinksByUserId(userId, activeOnly = false) {
     FROM links
     WHERE user_id = $1
       AND ($2::boolean = FALSE OR active = TRUE)
+      AND (hidden = FALSE OR hidden IS NULL)
     ORDER BY id ASC
     `,
     [Number(userId), !!activeOnly]
@@ -515,6 +548,20 @@ export async function deactivateLinkForUserId(linkId, userId) {
   );
   return q.rows[0] || null;
 }
+
+export async function updateLinkNameForUserId(linkId, userId, newName) {
+  const q = await pool.query(
+    `
+    UPDATE links
+    SET label = $3
+    WHERE id = $1 AND user_id = $2
+    RETURNING id, name, url
+    `,
+    [Number(linkId), Number(userId), newName]
+  );
+  return q.rows[0] || null;
+}
+
 
 // ===== FIX: brakujące eksporty (API + worker) =====
 function __fydParsePrice(raw) {
@@ -637,25 +684,25 @@ async function ensureQuietHoursTable() {
 }
 
 export async function getQuietHours(chatId) {
-  await ensureQuietHoursTable();
+  // Read from chat_quiet_hours (panel table) - single source of truth
   const q = await pool.query(
-    `SELECT chat_id, quiet_enabled, quiet_from, quiet_to FROM quiet_hours WHERE chat_id = $1 LIMIT 1`,
+    `SELECT chat_id, quiet_enabled, quiet_from, quiet_to FROM chat_quiet_hours WHERE chat_id = $1 LIMIT 1`,
     [String(chatId)]
   );
   return q.rows[0] || null;
 }
 
 export async function setQuietHours(chatId, fromHour, toHour) {
-  await ensureQuietHoursTable();
+  // Write to chat_quiet_hours (panel table) - single source of truth
   const f = Number(fromHour);
   const t = Number(toHour);
 
   const q = await pool.query(
     `
-    INSERT INTO quiet_hours (chat_id, quiet_enabled, quiet_from, quiet_to, updated_at)
-    VALUES ($1, TRUE, $2, $3, NOW())
+    INSERT INTO chat_quiet_hours (chat_id, quiet_enabled, quiet_from, quiet_to)
+    VALUES ($1, TRUE, $2, $3)
     ON CONFLICT (chat_id)
-    DO UPDATE SET quiet_enabled = TRUE, quiet_from = EXCLUDED.quiet_from, quiet_to = EXCLUDED.quiet_to, updated_at = NOW()
+    DO UPDATE SET quiet_enabled = TRUE, quiet_from = EXCLUDED.quiet_from, quiet_to = EXCLUDED.quiet_to
     RETURNING chat_id, quiet_enabled, quiet_from, quiet_to
     `,
     [String(chatId), f, t]
@@ -664,13 +711,13 @@ export async function setQuietHours(chatId, fromHour, toHour) {
 }
 
 export async function disableQuietHours(chatId) {
-  await ensureQuietHoursTable();
+  // Write to chat_quiet_hours (panel table) - single source of truth
   const q = await pool.query(
     `
-    INSERT INTO quiet_hours (chat_id, quiet_enabled, updated_at)
-    VALUES ($1, FALSE, NOW())
+    INSERT INTO chat_quiet_hours (chat_id, quiet_enabled)
+    VALUES ($1, FALSE)
     ON CONFLICT (chat_id)
-    DO UPDATE SET quiet_enabled = FALSE, updated_at = NOW()
+    DO UPDATE SET quiet_enabled = FALSE
     RETURNING chat_id, quiet_enabled, quiet_from, quiet_to
     `,
     [String(chatId)]

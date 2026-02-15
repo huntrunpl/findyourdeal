@@ -519,24 +519,67 @@ function buildVintedApiUrl(catalogUrl) {
 
 // ---------- Filtrowanie pod użytkownika ----------
 
-function matchFilters(item, filters = {}) {
+function matchFilters(item, filters = {}, stats = {}) {
   if (!filters || Object.keys(filters).length === 0) return true;
 
-  const price = typeof item.price === "number" ? item.price : null;
-
-  if (filters.minPrice != null && price != null && price < filters.minPrice) {
-    return false;
+  // Price filter: filters.price = {min, max}
+  if (filters.price && typeof filters.price === "object") {
+    const price = typeof item.price === "number" ? item.price : null;
+    if (price === null) {
+      if (stats) stats.drop_price = (stats.drop_price || 0) + 1;
+      return false; // No price when filter active = drop
+    }
+    if (filters.price.min != null && price < filters.price.min) {
+      if (stats) stats.drop_price = (stats.drop_price || 0) + 1;
+      return false;
+    }
+    if (filters.price.max != null && price > filters.price.max) {
+      if (stats) stats.drop_price = (stats.drop_price || 0) + 1;
+      return false;
+    }
   }
-  if (filters.maxPrice != null && price != null && price > filters.maxPrice) {
-    return false;
-  }
 
+  // Brand filter: filters.brand = ["Nike", "Adidas"]
   if (Array.isArray(filters.brand) && filters.brand.length) {
     const brandLower = (item.brand || "").toLowerCase();
+    if (!brandLower) {
+      if (stats) stats.drop_brand = (stats.drop_brand || 0) + 1;
+      return false; // No brand when filter active = drop
+    }
     const ok = filters.brand.some((b) =>
       brandLower.includes(String(b).toLowerCase())
     );
-    if (!ok) return false;
+    if (!ok) {
+      if (stats) stats.drop_brand = (stats.drop_brand || 0) + 1;
+      return false;
+    }
+  }
+
+  // Size filter: filters.size = ["M", "L", "XL"]
+  if (Array.isArray(filters.size) && filters.size.length) {
+    const sizeLower = (item.size || "").toLowerCase();
+    if (!sizeLower) {
+      if (stats) stats.drop_size = (stats.drop_size || 0) + 1;
+      return false; // No size when filter active = drop
+    }
+    const ok = filters.size.some(
+      (s) => sizeLower === String(s).toLowerCase()
+    );
+    if (!ok) {
+      if (stats) stats.drop_size = (stats.drop_size || 0) + 1;
+      return false;
+    }
+  }
+
+  // Legacy support: minPrice/maxPrice/sizes/conditions
+  const price = typeof item.price === "number" ? item.price : null;
+  if (filters.minPrice != null && price != null && price < filters.minPrice) {
+    if (stats) stats.drop_price = (stats.drop_price || 0) + 1;
+    return false;
+  }
+  if (filters.maxPrice != null && price != null && price > filters.maxPrice) {
+    if (stats) stats.drop_price = (stats.drop_price || 0) + 1;
+    return false;
   }
 
   if (Array.isArray(filters.sizes) && filters.sizes.length) {
@@ -544,7 +587,10 @@ function matchFilters(item, filters = {}) {
     const ok = filters.sizes.some(
       (s) => sizeLower === String(s).toLowerCase()
     );
-    if (!ok) return false;
+    if (!ok) {
+      if (stats) stats.drop_size = (stats.drop_size || 0) + 1;
+      return false;
+    }
   }
 
   if (Array.isArray(filters.conditions) && filters.conditions.length) {
@@ -1773,13 +1819,17 @@ async function processLink(link) {
   const minBatchItems = cfg.minBatchItems;
 
   const filters = safeParseFilters(link.filters);
-  const filtered = (scraped || []).filter((it) => matchFilters(it, filters));
+  const filterStats = { drop_price: 0, drop_size: 0, drop_brand: 0 };
+  const filtered = (scraped || []).filter((it) => matchFilters(it, filters, filterStats));
 
-  console.log(
-    `[link ${link.id}] filtered=${filtered.length} filtersKeys=${
-      Object.keys(filters || {}).length
-    }`
-  );
+  const hasFilters = filters && Object.keys(filters).length > 0;
+  if (hasFilters || filterStats.drop_price || filterStats.drop_size || filterStats.drop_brand) {
+    console.log(
+      `[FILTERS] link=${link.id} fetched=${scraped.length} pass=${filtered.length} drop_price=${
+        filterStats.drop_price
+      } drop_size=${filterStats.drop_size} drop_brand=${filterStats.drop_brand}`
+    );
+  }
 
   if (!filtered.length) {
     logDebug(`Worker: no items after filters for link ${link.id}`);
@@ -1835,8 +1885,15 @@ async function processLink(link) {
 
     await insertLinkItems(link.id, freshNotSeen);
 
-    const toSend = freshNotSeen.slice(0, maxPerLoop);
+    // Apply maxPerRun limit if set
+    const maxPerRun = filters?.maxPerRun;
+    const effectiveMax = (maxPerRun && maxPerRun > 0) ? Math.min(maxPerRun, maxPerLoop) : maxPerLoop;
+    const toSend = freshNotSeen.slice(0, effectiveMax);
     const skipped = freshNotSeen.length - toSend.length;
+
+    if (maxPerRun && maxPerRun > 0 && toSend.length > 0) {
+      console.log(`[FILTERS] link=${link.id} maxPerRun=${maxPerRun} sent=${toSend.length} available=${freshNotSeen.length}`);
+    }
 
     await notifyChatsForLink(link, toSend, skipped, { minBatchItems });
 
@@ -1883,9 +1940,15 @@ async function processLink(link) {
   // zapisujemy do DB wszystkie świeże nie-widziane
   await insertLinkItems(link.id, freshNotSeen);
 
-  // wysyłka limitowana
-  const toSend = freshNotSeen.slice(0, maxPerLoop);
+  // wysyłka limitowana + maxPerRun
+  const maxPerRun = filters?.maxPerRun;
+  const effectiveMax = (maxPerRun && maxPerRun > 0) ? Math.min(maxPerRun, maxPerLoop) : maxPerLoop;
+  const toSend = freshNotSeen.slice(0, effectiveMax);
   const skipped = freshNotSeen.length - toSend.length;
+
+  if (maxPerRun && maxPerRun > 0 && toSend.length > 0) {
+    console.log(`[FILTERS] link=${link.id} maxPerRun=${maxPerRun} sent=${toSend.length} available=${freshNotSeen.length}`);
+  }
 
   if (toSend.length) {
     await notifyChatsForLink(link, toSend, skipped, { minBatchItems });

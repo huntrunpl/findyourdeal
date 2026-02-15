@@ -6,14 +6,11 @@ import pg from "pg";
 import Stripe from "stripe";
 import { randomBytes } from "crypto";
 import { fileURLToPath } from "url";
-import os from "os";
 import { t, getUserLang } from "./i18n_unified.js";
 import { normalizeCommand } from "./command_aliases.js";
-import { buildAdvancedHelp } from "./utils/help-generator.js";
 
 const __filename = fileURLToPath(import.meta.url);
-const BUILD_ID = "20260215_102615"; // i18n/help+aliases hotfix: EN keys, per-lang aliases, getAliases() fix, test-i18n.js
-const BOT_CODE_HASH = "4246c9f8583238ad3ddca9865b016d83"; // Code fingerprint for runtime verification
+const BUILD_ID = "20260201_000000"; // Bot P0: /najnowsze + /najtansze restored (global + ID modes)
 
 import {
   initDb,
@@ -206,10 +203,8 @@ async function tgSend(chatId, text, extra = {}) {
       const res = await tgApi("sendMessage", {
         chat_id: chatId,
         text: part,
-        ...(extra.parse_mode !== undefined ? { parse_mode: extra.parse_mode } : { parse_mode: "HTML" }),
-        disable_web_page_preview: extra.disable_web_page_preview !== undefined 
-          ? extra.disable_web_page_preview 
-          : true,
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
         ...extraForThis,
       });
 
@@ -220,14 +215,7 @@ async function tgSend(chatId, text, extra = {}) {
         console.log("Telegram sent:", res.result?.message_id, "chatId=", chatId, "len=", String(part).length);
       }
     } catch (err) {
-      console.error("[TG_SEND_ERROR]", {
-        chatId,
-        textPreview: String(part).slice(0, 200),
-        error: err.message || String(err)
-      });
-      if (err.response?.body) {
-        console.error("[TG_SEND_ERROR_BODY]", err.response.body);
-      }
+      console.error("Telegram send error:", err.message || err);
     }
   }
 }
@@ -338,7 +326,6 @@ async function buildStatusMessage(chatId, user) {
   // Chat notification settings
   const todayStr = new Date().toISOString().slice(0, 10);
   let chatDefaultMode = "single";
-  let chatEnabled = true;
   let notifDebugData = { source: "none", enabled: null, mode: null, rowCount: 0 };
   
   try {
@@ -365,7 +352,6 @@ async function buildStatusMessage(chatId, user) {
       const enabled = row.enabled !== false;
       const mode = (row.mode || "single").toLowerCase();
       chatDefaultMode = mode;
-      chatEnabled = enabled;
 
       let daily = row.daily_count || 0;
       let dateStr = null;
@@ -376,8 +362,7 @@ async function buildStatusMessage(chatId, user) {
       }
       if (dateStr !== todayStr) daily = 0;
 
-      const modeKey = mode === "batch" ? "mode.batch" : mode === "off" ? "mode.off" : "mode.single";
-      const modeLabel = t(lang, modeKey);
+      const modeLabel = mode === "batch" ? "batch" : mode === "off" ? "off" : "single";
       const chatLineKey = enabled ? "status.chat_line_enabled" : "status.chat_line_disabled";
       text += t(lang, chatLineKey, { mode: modeLabel, daily, limit: dailyLimit }) + "\n\n";
     } else {
@@ -454,7 +439,7 @@ async function buildStatusMessage(chatId, user) {
         const src = (row.source || "").toUpperCase() || "LINK";
         const name = row.name || row.url;
         const lm = row.link_mode == null ? null : String(row.link_mode).toLowerCase();
-        const modeRaw =
+        const mode =
           lm === null
             ? chatDefaultMode
             : lm === "batch"
@@ -463,21 +448,8 @@ async function buildStatusMessage(chatId, user) {
             ? "off"
             : "single";
 
-        const modeKey = modeRaw === "batch" ? "mode.batch" : modeRaw === "off" ? "mode.off" : "mode.single";
-        const modeLabel = t(lang, modeKey);
         const state = row.active ? "✅" : "⛔";
-        
-        // Bell icon logic
-        let bell;
-        if (modeRaw === "off") {
-          bell = "🔕";
-        } else if (chatEnabled) {
-          bell = "🔔";
-        } else {
-          bell = "🔕";
-        }
-        
-        text += `• ${state}${bell} ${row.id} – ${escapeHtml(name)} (${src}) – ${modeLabel}\n`;
+        text += `• ${state} ${row.id} – ${escapeHtml(name)} (${src}) – mode: ${mode}\n`;
       }
 
       text += "\n" + t(lang, "status.per_link_hint");
@@ -494,51 +466,39 @@ async function buildStatusMessage(chatId, user) {
 
 async function handleHelp(msg, user) {
   const chatId = msg.chat.id;
-  try {
-    const lang = getUserLang(user);
-    
-    const text =
-      t(lang, "cmd.help_greeting") + "\n\n" +
-      t(lang, "cmd.help_basic") + "\n" +
-      t(lang, "cmd.help_basic_lista") + "\n" +
-      t(lang, "cmd.help_basic_usun") + "\n" +
-      t(lang, "cmd.help_basic_dodaj") + "\n" +
-      t(lang, "cmd.help_basic_status") + "\n" +
-      t(lang, "cmd.help_basic_panel") + "\n" +
-      t(lang, "cmd.help_basic_nazwa") + "\n\n" +
-      t(lang, "cmd.help_notif") + "\n" +
-      t(lang, "cmd.help_notif_on") + "\n" +
-      t(lang, "cmd.help_notif_off") + "\n" +
-      t(lang, "cmd.help_notif_single") + "\n" +
-      t(lang, "cmd.help_notif_batch") + "\n\n" +
-      t(lang, "cmd.help_perlink") + "\n" +
-      t(lang, "cmd.help_perlink_commands") + "\n\n" +
-      t(lang, "cmd.help_quiet") + "\n" +
-      t(lang, "cmd.help_quiet_show") + "\n" +
-      t(lang, "cmd.help_quiet_set") + "\n" +
-      t(lang, "cmd.help_quiet_off") + "\n\n" +
-      t(lang, "cmd.help_history") + "\n" +
-      t(lang, "cmd.help_history_najnowsze") + "\n" +
-      t(lang, "cmd.help_history_najnowsze_id") + "\n" +
-      t(lang, "cmd.help_history_najtansze") + "\n" +
-      t(lang, "cmd.help_history_najtansze_id") + "\n\n" +
-      t(lang, "cmd.help_plans") + "\n" +
-      t(lang, "cmd.help_plans_show") + "\n\n" +
-      t(lang, "cmd.help_lang") + "\n" +
-      t(lang, "cmd.help_lang_set") + "\n" +
-      buildAdvancedHelp(lang) + "\n" +
-      t(lang, "cmd.help_examples") + "\n" +
-      "<code>/lista</code>\n" +
-      "<code>/usun 18</code>\n" +
-      "<code>/dodaj https://www.olx.pl/oferty/?q=iphone14 iPhone 14 OLX</code>\n" +
-      "<code>/najnowsze 18</code>\n\n" +
-      `<i>v${BUILD_ID} • ${BOT_CODE_HASH.slice(0,8)} • ${os.hostname()}</i>`;
+  const lang = getUserLang(user);
+  
+  const text =
+    t(lang, "cmd.help_greeting") + "\n\n" +
+    t(lang, "cmd.help_basic") + "\n" +
+    t(lang, "cmd.help_basic_lista") + "\n" +
+    t(lang, "cmd.help_basic_usun") + "\n" +
+    t(lang, "cmd.help_basic_dodaj") + "\n" +
+    t(lang, "cmd.help_basic_status") + "\n" +
+    t(lang, "cmd.help_basic_panel") + "\n\n" +
+    t(lang, "cmd.help_notif") + "\n" +
+    t(lang, "cmd.help_notif_on") + "\n" +
+    t(lang, "cmd.help_notif_off") + "\n" +
+    t(lang, "cmd.help_notif_single") + "\n" +
+    t(lang, "cmd.help_notif_batch") + "\n\n" +
+    t(lang, "cmd.help_perlink") + "\n" +
+    t(lang, "cmd.help_perlink_commands") + "\n\n" +
+    t(lang, "cmd.help_quiet") + "\n" +
+    t(lang, "cmd.help_quiet_show") + "\n" +
+    t(lang, "cmd.help_quiet_set") + "\n" +
+    t(lang, "cmd.help_quiet_off") + "\n\n" +
+    t(lang, "cmd.help_history") + "\n" +
+    t(lang, "cmd.help_history_najnowsze") + "\n" +
+    t(lang, "cmd.help_history_najnowsze_id") + "\n" +
+    t(lang, "cmd.help_history_najtansze") + "\n" +
+    t(lang, "cmd.help_history_najtansze_id") + "\n\n" +
+    t(lang, "cmd.help_examples") + "\n" +
+    "<code>/lista</code>\n" +
+    "<code>/usun 18</code>\n" +
+    "<code>/dodaj https://www.olx.pl/oferty/?q=iphone14 iPhone 14 OLX</code>\n" +
+    "<code>/najnowsze 18</code>";
 
-    await tgSend(chatId, text);
-  } catch (e) {
-    console.error("[HELP_CRASH]", e?.stack || e);
-    await tgSend(chatId, "❌ /help crashed on server. Check logs: [HELP_CRASH].");
-  }
+  await tgSend(chatId, text);
 }
 
 // ---------- /debug ----------
@@ -551,20 +511,14 @@ async function handleDebug(msg) {
     ? `${lastRouterMatch.cmd} → ${lastRouterMatch.matched} (${new Date(lastRouterMatch.timestamp).toISOString()})`
     : "(none yet)";
   
-  const lines = [
-    "🐛 Debug Info",
-    "",
-    `bot_version: ${BUILD_ID}`,
-    `code_hash: ${BOT_CODE_HASH.slice(0, 12)}`,
-    `hostname: ${os.hostname()}`,
-    `file_path: ${__filename}`,
-    "",
-    `supported_langs: ${supportedLangsList}`,
-    "",
-    `last_router_match: ${lastMatch}`,
-  ];
+  const text = 
+    "🐛 <b>Debug Info</b>\\n\\n" +
+    `<b>bot_version:</b> ${BUILD_ID}\\n` +
+    `<b>file_path:</b> <code>${__filename}</code>\\n\\n` +
+    `<b>supported_langs:</b> ${supportedLangsList}\\n\\n` +
+    `<b>last_router_match:</b> ${lastMatch}`;
   
-  await tgSend(chatId, lines.join("\n"));
+  await tgSend(chatId, text);
 }
 
 // ---------- /panel ----------
@@ -768,27 +722,19 @@ async function handleLista(msg, user) {
     const links = await getLinksByUserId(user.id, true);
 
     if (!links.length) {
-      // Use plain text - no HTML entities needed
-      await tgSend(chatId, t(lang, "cmd.lista_empty"), { 
-        disable_web_page_preview: true 
-      });
+      await tgSend(chatId, t(lang, "cmd.no_links"));
       return;
     }
 
-    // Build list in plain text (no HTML) to avoid parse errors with URLs containing &
-    let text = t(lang, "cmd.lista_title") + "\n\n";
+    let text = t(lang, "lista.header");
     for (const row of links) {
-      const name = row.name || "(no name)";
-      text += `ID ${row.id} — ${name}\n`;
-      text += `${row.url}\n\n`;
+      const name = row.name || t(lang, "lista.no_name");
+      text += `ID <b>${row.id}</b> — ${escapeHtml(name)}\n`;
+      text += `<code>${escapeHtml(row.url)}</code>\n\n`;
     }
-    text += t(lang, "cmd.lista_disable") + "\n";
-    text += t(lang, "cmd.lista_example");
+    text += t(lang, "lista.footer");
 
-    // Send as plain text (parse_mode: null) to prevent HTML entity errors
-    await tgSend(chatId, text, { 
-      disable_web_page_preview: true 
-    });
+    await tgSend(chatId, text);
   } catch (err) {
     console.error("handleLista error:", err);
     await tgSend(chatId, t(lang, "cmd.error_lista"));
@@ -1115,7 +1061,6 @@ async function handleLanguage(msg, user) {
   const chatId = String(msg.chat.id);
   const arg = (msg.text || "").trim().split(/\s+/).slice(1).join(" ").trim().toLowerCase();
 
-  // CRITICAL: Use only user object - getUserLang() already has correct priority
   const lang = getUserLang(user);
 
   if (!arg) {
@@ -1157,13 +1102,13 @@ async function handleLanguage(msg, user) {
     return;
   }
 
-  // Update users.lang AND language (user's explicit choice)
-  // IMPORTANT: Do NOT update language_code - it's read-only from Telegram
+  // Update users.lang AND language_code (trigger will sync)
   process.stderr.write(`[lang_debug] Updating user ${user.id} lang from ${user.lang} to ${normalized}\n`);
   await dbQuery(
     `UPDATE users
      SET lang = $1,
          language = $1,
+         language_code = $1,
          updated_at = NOW()
      WHERE id = $2`,
     [normalized, user.id]
@@ -1176,11 +1121,11 @@ async function handleLanguage(msg, user) {
 
 // ---------- cisza nocna ----------
 
-async function handleQuiet(msg, user) {
+async function handleQuiet(msg) {
   const chatId = String(msg.chat.id);
   const arg = (msg.text || "").trim().split(/\s+/).slice(1).join(" ").trim();
 
-  const lang = getUserLang(user);
+  const lang = getUserLang({ telegram_user_id: msg?.from?.id });
 
   if (!arg) {
     const qh = await getQuietHours(chatId);
@@ -1213,9 +1158,9 @@ async function handleQuiet(msg, user) {
   await tgSend(chatId, t(lang, "quiet.set", { from: fromHour, to: toHour }));
 }
 
-async function handleQuietOff(msg, user) {
+async function handleQuietOff(msg) {
   const chatId = String(msg.chat.id);
-  const lang = getUserLang(user);
+  const lang = getUserLang({ telegram_user_id: msg?.from?.id });
   await disableQuietHours(chatId);
   await tgSend(chatId, t(lang, "quiet.disabled"));
 }
@@ -1664,14 +1609,6 @@ async function handleUpdate(update) {
   const chatId = msg.chat.id;
   const from = msg.from || {};
   const tgId = from.id ? String(from.id) : null;
-
-  // [P0] Log każdego update'a dla diagnostyki
-  console.log("[TG_UPDATE]", {
-    text: msg?.text,
-    chatId: msg?.chat?.id,
-    tgId: msg?.from?.id,
-    date: msg?.date
-  });
 let text = (msg.text ?? "").trim();
 
 // NORMALIZACJA: pozwól na spację zamiast "_"
@@ -1723,20 +1660,6 @@ await ensureUser(
     );
     return;
   }
-
-  // [P0] Language diagnostic log
-  console.log("[LANG_CHECK]", {
-    tgId: user.telegram_id,
-    user_language: user.language,
-    user_language_code: user.language_code,
-    computed: getUserLang(user),
-  });
-
-  // [P0] i18n smoke test
-  console.log("[I18N_SMOKE]", {
-    computed: getUserLang(user),
-    sample: t(getUserLang(user), "notif.enabled")
-  });
 
   await ensureChatNotificationsRow(String(chatId), user.id);
 
@@ -1843,14 +1766,14 @@ if (perLink) {
     await handleNotificationsOn(msg, user);
   } else if (canonical === "off") {
     await handleNotificationsOff(msg, user);
-  } else if (canonical === "pojedyncze") {
+  } else if (command === "/pojedyncze") {
     await handleModeSingle(msg, user);
-  } else if (canonical === "zbiorcze") {
+  } else if (command === "/zbiorcze") {
     await handleModeBatch(msg, user);
-  } else if (canonical === "cisza_off") {
-    await handleQuietOff(msg, user);
+  } else if (command.startsWith("/cisza_off")) {
+    await handleQuietOff(msg);
   } else if (canonical === "cisza") {
-    await handleQuiet(msg, user);
+    await handleQuiet(msg);
   } else if (canonical === "lang") {
     lastRouterMatch = { cmd: command, matched: "lang", timestamp: Date.now() };
     await handleLanguage(msg, user, argText);

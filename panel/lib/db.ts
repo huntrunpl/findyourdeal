@@ -82,8 +82,11 @@ export async function initPanelDb() {
         RETURNS TABLE(deleted_count int) AS $$
         BEGIN
           DELETE FROM panel_login_tokens
-          WHERE expires_at < NOW() - INTERVAL '5 minutes'
-          LIMIT 100;
+          WHERE token IN (
+            SELECT token FROM panel_login_tokens
+            WHERE expires_at < NOW() - INTERVAL '5 minutes'
+            LIMIT 100
+          );
           
           GET DIAGNOSTICS deleted_count = ROW_COUNT;
           RETURN QUERY SELECT deleted_count;
@@ -98,8 +101,11 @@ export async function initPanelDb() {
         RETURNS TABLE(deleted_count int) AS $$
         BEGIN
           DELETE FROM panel_sessions
-          WHERE expires_at < NOW()
-          LIMIT 100;
+          WHERE id IN (
+            SELECT id FROM panel_sessions
+            WHERE expires_at < NOW()
+            LIMIT 100
+          );
           
           GET DIAGNOSTICS deleted_count = ROW_COUNT;
           RETURN QUERY SELECT deleted_count;

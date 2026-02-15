@@ -6,7 +6,7 @@ export default function TimezonePill() {
   const [timezone, setTimezone] = useState("—");
 
   useEffect(() => {
-    fetch("/api/user/timezone")
+    fetch("/api/user/timezone", { credentials: "include" })
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data?.timezone) setTimezone(data.timezone);
