@@ -8,12 +8,12 @@ import { randomBytes } from "crypto";
 import { fileURLToPath } from "url";
 import os from "os";
 import { t, getUserLang } from "./i18n_unified.js";
-import { normalizeCommand } from "./command_aliases.js";
-import { buildAdvancedHelp } from "./utils/help-generator.js";
+import { normalizeCommand, getPrimaryAlias } from "./command_aliases.js";
 
 const __filename = fileURLToPath(import.meta.url);
-const BUILD_ID = "20260215_102615"; // i18n/help+aliases hotfix: EN keys, per-lang aliases, getAliases() fix, test-i18n.js
+const BUILD_ID = "20260215_230000"; // KROK 11.2+11.3: Admin command aliases (11 langs) + localized help_admin + canonical routing
 const BOT_CODE_HASH = "4246c9f8583238ad3ddca9865b016d83"; // Code fingerprint for runtime verification
+const START_TIME = Date.now(); // Bot start timestamp for uptime calculation
 
 import {
   initDb,
@@ -28,6 +28,8 @@ import {
   setQuietHours,
   disableQuietHours,
   getQuietHours,
+  logAdminAudit,
+  cleanupAuditLog,
 } from "./db.js";
 import { clearLinkNotificationMode } from "./db.js";
 
@@ -512,7 +514,8 @@ async function handleHelp(msg, user) {
       t(lang, "cmd.help_notif_single") + "\n" +
       t(lang, "cmd.help_notif_batch") + "\n\n" +
       t(lang, "cmd.help_perlink") + "\n" +
-      t(lang, "cmd.help_perlink_commands") + "\n\n" +
+      t(lang, "cmd.help_perlink_commands") + "\n" +
+      t(lang, "cmd.help_perlink_max") + "\n\n" +
       t(lang, "cmd.help_quiet") + "\n" +
       t(lang, "cmd.help_quiet_show") + "\n" +
       t(lang, "cmd.help_quiet_set") + "\n" +
@@ -525,13 +528,9 @@ async function handleHelp(msg, user) {
       t(lang, "cmd.help_plans") + "\n" +
       t(lang, "cmd.help_plans_show") + "\n\n" +
       t(lang, "cmd.help_lang") + "\n" +
-      t(lang, "cmd.help_lang_set") + "\n" +
-      buildAdvancedHelp(lang) + "\n" +
+      t(lang, "cmd.help_lang_set") + "\n\n" +
       t(lang, "cmd.help_examples") + "\n" +
-      "<code>/lista</code>\n" +
-      "<code>/usun 18</code>\n" +
-      "<code>/dodaj https://www.olx.pl/oferty/?q=iphone14 iPhone 14 OLX</code>\n" +
-      "<code>/najnowsze 18</code>\n\n" +
+      t(lang, "cmd.help_examples_text") + "\n\n" +
       `<i>v${BUILD_ID} • ${BOT_CODE_HASH.slice(0,8)} • ${os.hostname()}</i>`;
 
     await tgSend(chatId, text);
@@ -541,15 +540,60 @@ async function handleHelp(msg, user) {
   }
 }
 
+// ---------- /commands ----------
+
+async function handleCommands(msg, user) {
+  const chatId = msg.chat.id;
+  try {
+    const lang = getUserLang(user);
+    
+    const text =
+      t(lang, "cmd.commands_header") + "\n\n" +
+      t(lang, "cmd.commands_text") + "\n\n" +
+      t(lang, "cmd.commands_footer") + "\n\n" +
+      `<i>v${BUILD_ID} • ${BOT_CODE_HASH.slice(0,8)}</i>`;
+
+    await tgSend(chatId, text);
+  } catch (e) {
+    console.error("[COMMANDS_CRASH]", e?.stack || e);
+    await tgSend(chatId, "❌ /commands crashed on server. Check logs: [COMMANDS_CRASH].");
+  }
+}
+
 // ---------- /debug ----------
 
 async function handleDebug(msg) {
-  const chatId = msg.chat.id;
+  const chatId = String(msg.chat.id);
+  const tgId = msg.from?.id;
+  
+  // Admin gate
+  if (!isAdmin(tgId)) {
+    await tgSend(chatId, "❌ Brak uprawnień.");
+    return;
+  }
   
   const supportedLangsList = Object.keys(SUPPORTED_LANGS).join(", ");
   const lastMatch = lastRouterMatch.cmd 
     ? `${lastRouterMatch.cmd} → ${lastRouterMatch.matched} (${new Date(lastRouterMatch.timestamp).toISOString()})`
     : "(none yet)";
+  
+  // DB connection test
+  let dbStatus = "OK";
+  let dbLatency = 0;
+  try {
+    const start = Date.now();
+    await pool.query("SELECT 1 AS test");
+    dbLatency = Date.now() - start;
+  } catch (err) {
+    dbStatus = `ERROR: ${err.message}`;
+  }
+  
+  // Uptime
+  const uptimeMs = Date.now() - START_TIME;
+  const uptimeSec = Math.floor(uptimeMs / 1000);
+  const uptimeMin = Math.floor(uptimeSec / 60);
+  const uptimeHr = Math.floor(uptimeMin / 60);
+  const uptimeStr = `${uptimeHr}h ${uptimeMin % 60}m ${uptimeSec % 60}s`;
   
   const lines = [
     "🐛 Debug Info",
@@ -558,6 +602,10 @@ async function handleDebug(msg) {
     `code_hash: ${BOT_CODE_HASH.slice(0, 12)}`,
     `hostname: ${os.hostname()}`,
     `file_path: ${__filename}`,
+    `uptime: ${uptimeStr} (${uptimeMs}ms)`,
+    "",
+    `db_status: ${dbStatus}`,
+    `db_latency: ${dbLatency}ms`,
     "",
     `supported_langs: ${supportedLangsList}`,
     "",
@@ -565,6 +613,67 @@ async function handleDebug(msg) {
   ];
   
   await tgSend(chatId, lines.join("\n"));
+}
+
+// ---------- /debug_worker_links ----------
+
+async function handleDebugWorkerLinks(msg) {
+  const chatId = String(msg.chat.id);
+  const tgId = msg.from?.id;
+  
+  // Admin gate
+  if (!isAdmin(tgId)) {
+    await tgSend(chatId, "❌ Brak uprawnień.");
+    return;
+  }
+  
+  try {
+    const res = await pool.query(
+      `
+      SELECT
+        l.id,
+        l.name,
+        l.url,
+        l.chat_id,
+        u.plan_code,
+        u.plan_expires_at,
+        l.max_items_per_loop
+      FROM links l
+      JOIN users u ON u.id = l.user_id
+      WHERE l.active = TRUE
+      ORDER BY l.id ASC
+      LIMIT 50
+      `
+    );
+    
+    if (!res.rowCount) {
+      await tgSend(chatId, "📦 No active links in worker.");
+      return;
+    }
+    
+    const lines = ["📦 Active Worker Links:", ""];
+    
+    for (const row of res.rows) {
+      const maxLimit = row.max_items_per_loop != null ? `max:${row.max_items_per_loop}` : "default";
+      const exp = row.plan_expires_at ? row.plan_expires_at.toISOString().slice(0, 10) : "none";
+      const name = row.name || row.url.slice(0, 30);
+      
+      lines.push(
+        `• ID ${row.id} – ${escapeHtml(name)}\n  chat:${row.chat_id} plan:${row.plan_code || "free"} exp:${exp} ${maxLimit}`
+      );
+    }
+    
+    if (res.rowCount === 50) {
+      lines.push("", `... and more (showing first 50)`);
+    } else {
+      lines.push("", `Total: ${res.rowCount}`);
+    }
+    
+    await tgSend(chatId, lines.join("\n"));
+  } catch (err) {
+    console.error("[debug_worker_links]", err);
+    await tgSend(chatId, `❌ Error: ${err.message}`);
+  }
 }
 
 // ---------- /panel ----------
@@ -783,7 +892,9 @@ async function handleLista(msg, user) {
       text += `${row.url}\n\n`;
     }
     text += t(lang, "cmd.lista_disable") + "\n";
-    text += t(lang, "cmd.lista_example");
+    // Dynamic command example using primary alias for "usun" in user's language
+    const removeCmd = getPrimaryAlias("usun", lang);
+    text += `/${removeCmd} <ID>`;
 
     // Send as plain text (parse_mode: null) to prevent HTML entity errors
     await tgSend(chatId, text, { 
@@ -1023,6 +1134,501 @@ async function handleAdminReset(msg, _user, argText) {
     msg.chat.id,
     t(lang, "admin.reset_success", { tgId: escapeHtml(targetTgId), chats: chatRes.rowCount, links: linkRes.rowCount, since: nowIso })
   );
+}
+
+// ---------- /reset_daily ----------
+
+async function handleResetDaily(msg, user, argText) {
+  const callerTgId = msg?.from?.id;
+  const chatId = msg?.chat?.id ? String(msg.chat.id) : null;
+  const messageId = msg?.message_id;
+  
+  // Determine caller role
+  const superAdmins = String(process.env.FYD_SUPERADMIN_TG_IDS || "")
+    .split(/[, ]+/)
+    .map((x) => Number(String(x || "").trim()))
+    .filter((x) => Number.isFinite(x) && x > 0);
+  const callerRole = superAdmins.includes(Number(callerTgId)) ? "SUPERADMIN" : (isAdmin(callerTgId) ? "ADMIN" : "USER");
+  
+  // Admin gate
+  if (!isAdmin(callerTgId)) {
+    await tgSend(chatId, "⛔ Brak uprawnień (ADMIN).");
+    await logAdminAudit({
+      action: "reset_daily",
+      status: "FAIL",
+      reason: "NOT_AUTHORIZED",
+      callerTgId,
+      callerUserId: user?.id || null,
+      callerRole: "USER",
+      chatId,
+      messageId
+    });
+    return;
+  }
+
+  // Parse telegram_user_id
+  const targetTgId = Number(argText || 0);
+  if (!Number.isFinite(targetTgId) || targetTgId <= 0) {
+    await tgSend(chatId, "Użycie: /reset_daily <telegram_user_id>");
+    await logAdminAudit({
+      action: "reset_daily",
+      status: "FAIL",
+      reason: "INVALID_USAGE",
+      callerTgId,
+      callerUserId: user?.id || null,
+      callerRole,
+      chatId,
+      messageId
+    });
+    return;
+  }
+
+  // Map telegram_user_id to user_id and get timezone
+  let userRow;
+  try {
+    const res = await dbQuery(
+      `SELECT id, COALESCE(NULLIF(timezone,''),'Europe/Warsaw') AS tz FROM users WHERE telegram_user_id=$1 LIMIT 1`,
+      [targetTgId]
+    );
+    if (!res.rows.length) {
+      await tgSend(chatId, `ℹ️ Nie znaleziono użytkownika o telegram_user_id=${targetTgId}`);
+      await logAdminAudit({
+        action: "reset_daily",
+        status: "FAIL",
+        reason: "TARGET_NOT_FOUND",
+        callerTgId,
+        callerUserId: user?.id || null,
+        callerRole,
+        targetTgId,
+        chatId,
+        messageId
+      });
+      return;
+    }
+    userRow = res.rows[0];
+  } catch (err) {
+    await tgSend(chatId, `❌ Błąd pobierania użytkownika: ${escapeHtml(String(err?.message || err))}`);
+    await logAdminAudit({
+      action: "reset_daily",
+      status: "FAIL",
+      reason: `DB_ERROR: ${err?.message || err}`,
+      callerTgId,
+      callerUserId: user?.id || null,
+      callerRole,
+      targetTgId,
+      chatId,
+      messageId
+    });
+    return;
+  }
+
+  const userId = Number(userRow.id);
+  const tz = userRow.tz || 'Europe/Warsaw';
+
+  // Reset daily counter in chat_notifications
+  let rowCount = 0;
+  try {
+    const updateRes = await dbQuery(
+      `UPDATE public.chat_notifications 
+       SET daily_count=0, 
+           daily_count_date=(NOW() AT TIME ZONE $2)::date, 
+           updated_at=NOW() 
+       WHERE user_id=$1`,
+      [userId, tz]
+    );
+    rowCount = updateRes.rowCount || 0;
+  } catch (err) {
+    await tgSend(chatId, `❌ Błąd resetowania: ${escapeHtml(String(err?.message || err))}`);
+    await logAdminAudit({
+      action: "reset_daily",
+      status: "FAIL",
+      reason: `DB_ERROR: ${err?.message || err}`,
+      callerTgId,
+      callerUserId: user?.id || null,
+      callerRole,
+      targetTgId,
+      targetUserId: userId,
+      chatId,
+      messageId
+    });
+    return;
+  }
+
+  // Success message
+  await tgSend(
+    chatId,
+    `✅ Zresetowano dzienny licznik dla tg_user_id=<code>${targetTgId}</code> (user_id=<code>${userId}</code>).\n` +
+    `Rekordy: <b>${rowCount}</b>\n` +
+    `TZ: <code>${escapeHtml(tz)}</code>`
+  );
+
+  // Audit log SUCCESS
+  await logAdminAudit({
+    action: "reset_daily",
+    status: "SUCCESS",
+    reason: null,
+    callerTgId,
+    callerUserId: user?.id || null,
+    callerRole,
+    targetTgId,
+    targetUserId: userId,
+    chatId,
+    messageId,
+    payload: { tz, rowCount }
+  });
+}
+
+// ---------- /technik ----------
+
+async function handleTechnik(msg, _user, argText) {
+  const callerTgId = msg?.from?.id;
+  const chatId = String(msg.chat.id);
+  
+  // Admin gate
+  if (!isAdmin(callerTgId)) {
+    await tgSend(chatId, "⛔ Brak uprawnień (ADMIN).");
+    return;
+  }
+
+  const targetTgId = Number(argText || callerTgId || 0);
+  if (!Number.isFinite(targetTgId) || targetTgId <= 0) {
+    await tgSend(chatId, "Użycie: /technik <telegram_user_id>");
+    return;
+  }
+
+  let userId = 0;
+  try {
+    const res = await dbQuery(
+      `SELECT id FROM users WHERE telegram_user_id=$1 LIMIT 1`,
+      [targetTgId]
+    );
+    userId = res.rows[0]?.id ? Number(res.rows[0].id) : 0;
+  } catch (err) {
+    // Silent fail
+  }
+
+  await tgSend(
+    chatId,
+    `🛠 <b>TECHNIK</b>\n` +
+    `tg_user_id: <code>${escapeHtml(String(targetTgId))}</code>\n` +
+    `user_id: <code>${escapeHtml(String(userId || 0))}</code>`
+  );
+}
+
+// ---------- /daj_admina ----------
+
+async function handleDajAdmina(msg, user, argText) {
+  const callerTgId = msg?.from?.id;
+  const chatId = msg?.chat?.id ? String(msg.chat.id) : null;
+  const messageId = msg?.message_id;
+  
+  // SUPERADMIN gate
+  const superAdmins = String(process.env.FYD_SUPERADMIN_TG_IDS || "")
+    .split(/[, ]+/)
+    .map((x) => Number(String(x || "").trim()))
+    .filter((x) => Number.isFinite(x) && x > 0);
+
+  if (!superAdmins.includes(Number(callerTgId))) {
+    await tgSend(chatId, "⛔ Brak uprawnień (tylko SUPERADMIN).");
+    await logAdminAudit({
+      action: "grant_admin",
+      status: "FAIL",
+      reason: "NOT_AUTHORIZED",
+      callerTgId,
+      callerUserId: user?.id || null,
+      callerRole: "USER",
+      chatId,
+      messageId
+    });
+    return;
+  }
+
+  const targetTgId = Number(argText || 0);
+  if (!Number.isFinite(targetTgId) || targetTgId <= 0) {
+    await tgSend(chatId, "Użycie: /daj_admina <telegram_user_id>");
+    await logAdminAudit({
+      action: "grant_admin",
+      status: "FAIL",
+      reason: "INVALID_USAGE",
+      callerTgId,
+      callerUserId: user?.id || null,
+      callerRole: "SUPERADMIN",
+      chatId,
+      messageId
+    });
+    return;
+  }
+
+  try {
+    await dbQuery("UPDATE users SET is_admin=TRUE WHERE telegram_user_id=$1", [targetTgId]).catch(() => {});
+    const check = await dbQuery("SELECT id FROM users WHERE telegram_user_id=$1 LIMIT 1", [targetTgId]);
+    if (!check.rows.length) {
+      await tgSend(chatId, `ℹ️ Nie znaleziono użytkownika o telegram_user_id=${targetTgId} (najpierw musi zrobić /start).`);
+      await logAdminAudit({
+        action: "grant_admin",
+        status: "FAIL",
+        reason: "TARGET_NOT_FOUND",
+        callerTgId,
+        callerUserId: user?.id || null,
+        callerRole: "SUPERADMIN",
+        targetTgId,
+        chatId,
+        messageId
+      });
+      return;
+    }
+    const targetUserId = Number(check.rows[0].id);
+    await tgSend(chatId, `✅ Nadano ADMIN dla telegram_user_id=${targetTgId}`);
+    await logAdminAudit({
+      action: "grant_admin",
+      status: "SUCCESS",
+      reason: null,
+      callerTgId,
+      callerUserId: user?.id || null,
+      callerRole: "SUPERADMIN",
+      targetTgId,
+      targetUserId,
+      chatId,
+      messageId
+    });
+  } catch (err) {
+    await tgSend(chatId, `❌ Błąd nadawania admina: ${escapeHtml(String(err?.message || err))}`);
+    await logAdminAudit({
+      action: "grant_admin",
+      status: "FAIL",
+      reason: `DB_ERROR: ${err?.message || err}`,
+      callerTgId,
+      callerUserId: user?.id || null,
+      callerRole: "SUPERADMIN",
+      targetTgId,
+      chatId,
+      messageId
+    });
+  }
+}
+
+// ---------- /usun_uzytkownika ----------
+
+async function handleUsunUzytkownika(msg, user, argText) {
+  const callerTgId = msg?.from?.id;
+  const chatId = msg?.chat?.id ? String(msg.chat.id) : null;
+  const messageId = msg?.message_id;
+  
+  // SUPERADMIN gate
+  const superAdmins = String(process.env.FYD_SUPERADMIN_TG_IDS || "")
+    .split(/[, ]+/)
+    .map((x) => Number(String(x || "").trim()))
+    .filter((x) => Number.isFinite(x) && x > 0);
+
+  if (!superAdmins.includes(Number(callerTgId))) {
+    await tgSend(chatId, "⛔ Brak uprawnień (tylko SUPERADMIN).");
+    await logAdminAudit({
+      action: "delete_user",
+      status: "FAIL",
+      reason: "NOT_AUTHORIZED",
+      callerTgId,
+      callerUserId: user?.id || null,
+      callerRole: "USER",
+      chatId,
+      messageId
+    });
+    return;
+  }
+
+  const targetTgId = Number(argText || 0);
+  if (!Number.isFinite(targetTgId) || targetTgId <= 0) {
+    await tgSend(chatId, "Użycie: /usun_uzytkownika <telegram_user_id>");
+    await logAdminAudit({
+      action: "delete_user",
+      status: "FAIL",
+      reason: "INVALID_USAGE",
+      callerTgId,
+      callerUserId: user?.id || null,
+      callerRole: "SUPERADMIN",
+      chatId,
+      messageId
+    });
+    return;
+  }
+
+  const safe = async (sql, params) => {
+    try { await dbQuery(sql, params); } catch {}
+  };
+
+  try {
+    const u = await dbQuery("SELECT id FROM users WHERE telegram_user_id=$1 LIMIT 1", [targetTgId]);
+    if (!u.rows.length) {
+      await tgSend(chatId, `ℹ️ Nie znaleziono użytkownika o telegram_user_id=${targetTgId}`);
+      await logAdminAudit({
+        action: "delete_user",
+        status: "FAIL",
+        reason: "TARGET_NOT_FOUND",
+        callerTgId,
+        callerUserId: user?.id || null,
+        callerRole: "SUPERADMIN",
+        targetTgId,
+        chatId,
+        messageId
+      });
+      return;
+    }
+    const userId = Number(u.rows[0].id);
+
+    await dbQuery("BEGIN");
+
+    await safe("DELETE FROM panel_sessions WHERE user_id=$1", [userId]);
+    await safe("DELETE FROM panel_login_tokens WHERE user_id=$1", [userId]);
+    await safe("DELETE FROM subscriptions WHERE user_id=$1", [userId]);
+
+    await safe("DELETE FROM link_notification_modes WHERE user_id=$1", [userId]);
+    await safe("DELETE FROM chat_notifications WHERE user_id=$1", [userId]);
+
+    await safe("DELETE FROM link_items WHERE link_id IN (SELECT id FROM links WHERE user_id=$1)", [userId]);
+    await safe("DELETE FROM link_notification_modes WHERE link_id IN (SELECT id FROM links WHERE user_id=$1)", [userId]);
+    await safe("DELETE FROM sent_offers WHERE user_id=$1", [userId]);
+    await safe("DELETE FROM links WHERE user_id=$1", [userId]);
+
+    await dbQuery("DELETE FROM users WHERE id=$1", [userId]);
+
+    await dbQuery("COMMIT");
+    await tgSend(chatId, `✅ Usunięto użytkownika telegram_user_id=${targetTgId} (user_id=${userId}) i wyczyszczono jego dane.`);
+    await logAdminAudit({
+      action: "delete_user",
+      status: "SUCCESS",
+      reason: null,
+      callerTgId,
+      callerUserId: user?.id || null,
+      callerRole: "SUPERADMIN",
+      targetTgId,
+      targetUserId: userId,
+      chatId,
+      messageId,
+      payload: { deleted_tables: ["panel_sessions", "panel_login_tokens", "subscriptions", "link_notification_modes", "chat_notifications", "link_items", "sent_offers", "links", "users"] }
+    });
+  } catch (err) {
+    try { await dbQuery("ROLLBACK"); } catch {}
+    await tgSend(chatId, `❌ Błąd usuwania użytkownika: ${escapeHtml(String(err?.message || err))}`);
+    await logAdminAudit({
+      action: "delete_user",
+      status: "FAIL",
+      reason: `DB_ERROR: ${err?.message || err}`,
+      callerTgId,
+      callerUserId: user?.id || null,
+      callerRole: "SUPERADMIN",
+      targetTgId,
+      chatId,
+      messageId
+    });
+  }
+}
+
+// ---------- /help_admin ----------
+
+async function handleHelpAdmin(msg, user) {
+  const callerTgId = msg?.from?.id;
+  const chatId = String(msg.chat.id);
+  
+  // Admin gate
+  if (!isAdmin(callerTgId)) {
+    await tgSend(chatId, "⛔ Brak uprawnień (ADMIN).");
+    return;
+  }
+
+  const lang = getUserLang(user);
+  await tgSend(chatId, t(lang, "cmd.help_admin_text"));
+}
+
+// ---------- /audit ----------
+
+async function handleAudit(msg, user, argText) {
+  const callerTgId = msg?.from?.id;
+  const chatId = String(msg.chat.id);
+  
+  // Admin gate
+  if (!isAdmin(callerTgId)) {
+    await tgSend(chatId, "⛔ Brak uprawnień (ADMIN).");
+    return;
+  }
+
+  const lang = getUserLang(user);
+
+  // Parse arguments: /audit <telegram_user_id> [limit]
+  const args = (argText || "").trim().split(/\s+/);
+  const targetTgId = Number(args[0] || 0);
+  const limit = Number(args[1] || 20);
+
+  if (!Number.isFinite(targetTgId) || targetTgId <= 0) {
+    await tgSend(chatId, t(lang, "cmd.audit_usage"));
+    return;
+  }
+
+  if (!Number.isFinite(limit) || limit <= 0 || limit > 100) {
+    await tgSend(chatId, t(lang, "cmd.audit_usage"));
+    return;
+  }
+
+  try {
+    const res = await dbQuery(
+      `SELECT 
+        id, created_at, action, status, reason,
+        caller_tg_id, caller_role,
+        target_tg_id, target_user_id,
+        payload
+       FROM public.admin_audit_log
+       WHERE target_tg_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [targetTgId, limit]
+    );
+
+    if (!res.rows.length) {
+      await tgSend(chatId, t(lang, "cmd.audit_empty", { target_tg_id: targetTgId }));
+      return;
+    }
+
+    let text = t(lang, "cmd.audit_header", { target_tg_id: targetTgId, count: res.rows.length, limit });
+    text += "\n\n";
+
+    for (const row of res.rows) {
+      const ts = new Date(row.created_at).toISOString().replace("T", " ").substring(0, 19);
+      const payloadStr = row.payload ? ` | ${JSON.stringify(row.payload)}` : "";
+      
+      text += t(lang, "cmd.audit_line", {
+        timestamp: ts,
+        action: row.action,
+        status: row.status,
+        caller_tg_id: row.caller_tg_id,
+        caller_role: row.caller_role || "—",
+        reason: row.reason || "—",
+        payload: payloadStr
+      });
+      text += "\n";
+    }
+
+    // Split if too long
+    if (text.length > 4000) {
+      const chunks = [];
+      let current = "";
+      for (const line of text.split("\n")) {
+        if ((current + line + "\n").length > 4000) {
+          chunks.push(current);
+          current = line + "\n";
+        } else {
+          current += line + "\n";
+        }
+      }
+      if (current) chunks.push(current);
+
+      for (const chunk of chunks) {
+        await tgSend(chatId, chunk);
+      }
+    } else {
+      await tgSend(chatId, text);
+    }
+  } catch (err) {
+    console.error("[AUDIT_ERROR]", err?.stack || err);
+    await tgSend(chatId, `❌ Error fetching audit log: ${escapeHtml(String(err?.message || err))}`);
+  }
 }
 
 // ---------- /pojedyncze /zbiorcze (domyślny tryb czatu) ----------
@@ -1452,6 +2058,63 @@ async function handleNajtansze(msg, user, argText) {
   await tgSend(chatId, out.trim(), { disable_web_page_preview: true });
 }
 
+// ---------- /max <ID> <value> - set per-link item limit ----------
+
+async function handleMax(msg, user, argText) {
+  const chatId = String(msg.chat.id);
+  const lang = getUserLang(user);
+  const args = argText.trim().split(/\s+/);
+  const linkIdStr = args[0];
+  const valueStr = args[1];
+
+  if (!linkIdStr) {
+    await tgSend(chatId, t(lang, "cmd.max_usage"));
+    return;
+  }
+
+  const linkId = Number(linkIdStr);
+  if (!Number.isFinite(linkId) || linkId <= 0) {
+    await tgSend(chatId, t(lang, "cmd.max_invalid_id"));
+    return;
+  }
+
+  // Verify ownership
+  const linkQ = await dbQuery(
+    `SELECT id, name FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
+    [linkId, user.id]
+  );
+
+  if (!linkQ.rowCount) {
+    await tgSend(chatId, t(lang, "cmd.link_not_found", { id: linkId }));
+    return;
+  }
+
+  const linkName = linkQ.rows[0].name || `#${linkId}`;
+
+  // Parse value: "off" or number
+  if (!valueStr || valueStr.toLowerCase() === "off") {
+    await dbQuery(
+      `UPDATE links SET max_items_per_loop = NULL WHERE id = $1`,
+      [linkId]
+    );
+    await tgSend(chatId, t(lang, "cmd.max_disabled", { id: linkId, name: linkName }));
+    return;
+  }
+
+  const limit = Number(valueStr);
+  if (!Number.isFinite(limit) || limit < 1 || limit > 100) {
+    await tgSend(chatId, t(lang, "cmd.max_invalid_value"));
+    return;
+  }
+
+  await dbQuery(
+    `UPDATE links SET max_items_per_loop = $1 WHERE id = $2`,
+    [limit, linkId]
+  );
+
+  await tgSend(chatId, t(lang, "cmd.max_set", { id: linkId, name: linkName, value: limit }));
+}
+
 // ---------- callback_query z przycisków (lnmode:ID:mode) ----------
 
 async function handleCallback(update) {
@@ -1759,70 +2422,99 @@ await ensureUser(
     return;
   }
 
-// komendy per-link: /pojedyncze_18 /zbiorcze_18 /off_18 /on_18
-const perLink = command.match(/^\/(pojedyncze|zbiorcze|off|on)_(\d+)$/i);
-if (perLink) {
-  const kind = perLink[1].toLowerCase();
-  const linkId = Number(perLink[2]);
-  const lang = getUserLang(user);
+  // Per-link commands with space syntax: /off 18, /on 18, /pojedyncze 18, /zbiorcze 18
+  // Check if canonical is a per-link candidate AND has a numeric argument
+  if (["off", "on", "pojedyncze", "zbiorcze"].includes(canonical)) {
+    const linkIdStr = argText.trim().split(/\s+/)[0];
+    const linkId = linkIdStr ? Number(linkIdStr) : null;
 
-  // /on_ID = usuń override (wraca do domyślnego trybu czatu)
-  if (kind === "on") {
-    // zabezpieczenie: link musi należeć do usera
-    const chk = await dbQuery(
-      `SELECT id FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
-      [Number(linkId), Number(user.id)]
-    );
-    if (!chk.rowCount) {
-      await tgSend(chatId, t(lang, "cmd.link_not_found", { id: linkId }));
+    if (linkId && !isNaN(linkId) && linkId > 0) {
+      // Per-link mode detected
+      const lang = getUserLang(user);
+
+      // /on ID = usuń override (wraca do domyślnego trybu czatu)
+      if (canonical === "on") {
+        // zabezpieczenie: link musi należeć do usera
+        const chk = await dbQuery(
+          `SELECT id FROM links WHERE id = $1 AND user_id = $2 LIMIT 1`,
+          [Number(linkId), Number(user.id)]
+        );
+        if (!chk.rowCount) {
+          await tgSend(chatId, t(lang, "cmd.link_not_found", { id: linkId }));
+          return;
+        }
+
+        await clearLinkNotificationMode(user.id, String(chatId), linkId);
+
+        // reset notify_from dla tego konkretnego linku (zaczynam zbierać oferty od teraz)
+        await dbQuery(
+          `UPDATE links SET notify_from = NOW() WHERE id = $1 AND user_id = $2`,
+          [Number(linkId), Number(user.id)]
+        );
+
+        // odczytaj domyślny tryb czatu (żeby ładnie potwierdzić)
+        const cn = await dbQuery(
+          `SELECT mode FROM chat_notifications WHERE chat_id = $1 AND user_id = $2 LIMIT 1`,
+          [String(chatId), Number(user.id)]
+        );
+        const chatMode =
+          (cn.rows[0]?.mode || "single").toLowerCase() === "batch" ? "zbiorczo" : "pojedynczo";
+
+        await tgSend(
+          chatId,
+          t(lang, "callback.link_mode_set", { linkId, mode: `ON (${chatMode})` })
+        );
+        return;
+      }
+
+      const mode = canonical === "zbiorcze" ? "batch" : canonical === "off" ? "off" : "single";
+      const res = await setPerLinkMode(String(chatId), user.id, linkId, mode);
+
+      if (!res.ok) {
+        await tgSend(chatId, t(lang, "callback.mode_set_failed"));
+        return;
+      }
+
+      const pretty =
+        res.mode === "batch" ? "batch" : res.mode === "off" ? "OFF" : "single";
+
+      await tgSend(chatId, t(lang, "callback.link_mode_set", { linkId, mode: pretty }));
       return;
     }
-
-    await clearLinkNotificationMode(user.id, String(chatId), linkId);
-
-    // reset notify_from dla tego konkretnego linku (zaczynam zbierać oferty od teraz)
-    await dbQuery(
-      `UPDATE links SET notify_from = NOW() WHERE id = $1 AND user_id = $2`,
-      [Number(linkId), Number(user.id)]
-    );
-
-    // odczytaj domyślny tryb czatu (żeby ładnie potwierdzić)
-    const cn = await dbQuery(
-      `SELECT mode FROM chat_notifications WHERE chat_id = $1 AND user_id = $2 LIMIT 1`,
-      [String(chatId), Number(user.id)]
-    );
-    const chatMode =
-      (cn.rows[0]?.mode || "single").toLowerCase() === "batch" ? "zbiorczo" : "pojedynczo";
-
-    await tgSend(
-      chatId,
-      t(lang, "callback.link_mode_set", { linkId, mode: `ON (${chatMode})` })
-    );
-    return;
+    // If no valid linkId, fall through to chat-level handlers below
   }
-
-  const mode = kind === "zbiorcze" ? "batch" : kind === "off" ? "off" : "single";
-  const res = await setPerLinkMode(String(chatId), user.id, linkId, mode);
-
-  if (!res.ok) {
-    await tgSend(chatId, t(lang, "callback.mode_set_failed"));
-    return;
-  }
-
-  const pretty =
-    res.mode === "batch" ? "batch" : res.mode === "off" ? "OFF" : "single";
-
-  await tgSend(chatId, t(lang, "callback.link_mode_set", { linkId, mode: pretty }));
-  return;
-}
 
   // Router with canonical commands (supports aliases)
   if (canonical === "start" || canonical === "help") {
     lastRouterMatch = { cmd: command, matched: "help", timestamp: Date.now() };
     await handleHelp(msg, user);
-  } else if (command === "/debug") {
+  } else if (canonical === "commands") {
+    lastRouterMatch = { cmd: command, matched: "commands", timestamp: Date.now() };
+    await handleCommands(msg, user);
+  } else if (canonical === "debug") {
     lastRouterMatch = { cmd: command, matched: "debug", timestamp: Date.now() };
     await handleDebug(msg);
+  } else if (canonical === "debug_worker_links") {
+    lastRouterMatch = { cmd: command, matched: "debug_worker_links", timestamp: Date.now() };
+    await handleDebugWorkerLinks(msg);
+  } else if (canonical === "reset_daily") {
+    lastRouterMatch = { cmd: command, matched: "reset_daily", timestamp: Date.now() };
+    await handleResetDaily(msg, user, argText);
+  } else if (canonical === "help_admin") {
+    lastRouterMatch = { cmd: command, matched: "help_admin", timestamp: Date.now() };
+    await handleHelpAdmin(msg, user);
+  } else if (canonical === "audit") {
+    lastRouterMatch = { cmd: command, matched: "audit", timestamp: Date.now() };
+    await handleAudit(msg, user, argText);
+  } else if (canonical === "technik") {
+    lastRouterMatch = { cmd: command, matched: "technik", timestamp: Date.now() };
+    await handleTechnik(msg, user, argText);
+  } else if (canonical === "daj_admina") {
+    lastRouterMatch = { cmd: command, matched: "daj_admina", timestamp: Date.now() };
+    await handleDajAdmina(msg, user, argText);
+  } else if (canonical === "usun_uzytkownika") {
+    lastRouterMatch = { cmd: command, matched: "usun_uzytkownika", timestamp: Date.now() };
+    await handleUsunUzytkownika(msg, user, argText);
   } else if (canonical === "plany") {
     lastRouterMatch = { cmd: command, matched: "plany", timestamp: Date.now() };
     console.log("[cmd]", { matched: "plany", telegramUserId: tgId });
@@ -1860,6 +2552,9 @@ if (perLink) {
   } else if (canonical === "najtansze") {
     lastRouterMatch = { cmd: command, matched: "najtansze", timestamp: Date.now() };
     await handleNajtansze(msg, user, argText);
+  } else if (canonical === "max") {
+    lastRouterMatch = { cmd: command, matched: "max", timestamp: Date.now() };
+    await handleMax(msg, user, argText);
   } else {
     lastRouterMatch = { cmd: command, matched: "unknown", timestamp: Date.now() };
     const lang = getUserLang(user);
@@ -1878,6 +2573,9 @@ async function main() {
   console.log(`[BOT_LANGS] ${Object.keys(SUPPORTED_LANGS).join(", ")}`);
 
   await initDb();
+
+  // Cleanup old audit logs (retention: 180 days) - KROK 6.2
+  await cleanupAuditLog(180);
 
   while (true) {
     try {

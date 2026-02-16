@@ -32,6 +32,9 @@ export const COMMAND_ALIASES = {
     cs: ["nápověda"],
     sk: ["pomoc", "pomoc"],
   },
+  commands: {
+    en: ["commands", "komendy", "befehle", "commandes", "comandi", "comandos", "comenzi", "opdrachten", "příkazy"],
+  },
   status: {
     en: ["status", "stan"],
     de: ["zustand"],
@@ -168,137 +171,6 @@ export const COMMAND_ALIASES = {
   lang: {
     en: ["lang", "jezyk", "język", "sprache", "langue", "lingua", "idioma", "língua", "limbă", "taal", "jazyk"],
   },
-  priorytet: {
-    en: ["priority"],
-    pl: ["priorytet"],
-    de: ["priorität"],
-    fr: ["priorité"],
-    it: ["priorità"],
-    es: ["prioridad"],
-    pt: ["prioridade"],
-    ro: ["prioritate"],
-    nl: ["prioriteit"],
-  },
-  ukry: {
-    en: ["hide"],
-    pl: ["ukry"],
-    de: ["verstecken"],
-    fr: ["cacher"],
-    it: ["nascondi"],
-    es: ["ocultar"],
-    pt: ["esconder"],
-    ro: ["ascunde"],
-    nl: ["verbergen"],
-    cs: ["skrýt"],
-    sk: ["skryť"],
-  },
-  ukry_off: {
-    en: ["ukry_off", "unhide", "show", "odkryj"],
-    de: ["zeigen"],
-    fr: ["montrer"],
-    it: ["mostra"],
-    es: ["mostrar"],
-    ro: ["afișează"],
-    nl: ["tonen"],
-    cs: ["zobrazit"],
-    sk: ["zobraziť"],
-  },
-  zapis: {
-    pl: ["zapis"],
-    en: ["save"],
-    de: ["speichern"],
-    fr: ["sauvegarder"],
-    it: ["salva"],
-    es: ["guardar"],
-    pt: ["salvar"],
-    ro: ["salvează"],
-    nl: ["opslaan"],
-    cs: ["uložit"],
-  },
-  zapis_off: {
-    en: ["zapis_off", "unsave", "clear_preset"],
-    de: ["löschen"],
-    fr: ["effacer"],
-    it: ["cancella"],
-    es: ["borrar"],
-    pt: ["apagar"],
-    ro: ["șterge"],
-    nl: ["wissen"],
-    cs: ["smazat"],
-    sk: ["zmazať"],
-  },
-  config: {
-    pl: ["konfiguracja"],
-    en: ["config"],
-    de: ["konfiguration"],
-    fr: ["configuration"],
-    it: ["configurazione"],
-    es: ["configuración"],
-    pt: ["configuração"],
-    ro: ["configurare"],
-    nl: ["configuratie"],
-  },
-  cena: {
-    pl: ["cena"],
-    en: ["price"],
-    de: ["preis"],
-    fr: ["prix"],
-    it: ["prezzo"],
-    es: ["precio"],
-    pt: ["preço"],
-    ro: ["preț"],
-    nl: ["prijs"],
-  },
-  cena_off: {
-    pl: ["cena_off"],
-    en: ["price_off", "clear_price"],
-    de: ["preis_aus"],
-    fr: ["prix_off"],
-    it: ["prezzo_off"],
-    es: ["precio_off"],
-    pt: ["preço_off"],
-    ro: ["preț_off"],
-    nl: ["prijs_uit"],
-  },
-  rozmiar: {
-    en: ["size"],
-    pl: ["rozmiar"],
-    de: ["größe"],
-    fr: ["taille"],
-    it: ["dimensione"],
-    es: ["tamaño"],
-    pt: ["tamanho"],
-    ro: ["mărime"],
-    nl: ["maat"],
-    cs: ["velikost"],
-  },
-  rozmiar_off: {
-    pl: ["rozmiar_off"],
-    en: ["size_off", "clear_size"],
-    de: ["größe_aus"],
-    fr: ["taille_off"],
-    it: ["dimensione_off"],
-    es: ["tamaño_off"],
-    pt: ["tamanho_off"],
-    ro: ["mărime_off"],
-    nl: ["maat_uit"],
-  },
-  marka: {
-    en: ["brand"],
-    pl: ["marka"],
-    de: ["marke"],
-    fr: ["marque"],
-    it: ["marca"],
-  },
-  marka_off: {
-    pl: ["marka_off"],
-    en: ["brand_off", "clear_brand"],
-    de: ["marke_aus"],
-    fr: ["marque_off"],
-    it: ["marca_off"],
-    es: ["marca_off"],
-    pt: ["marca_off"],
-  },
   max: {
     en: ["max", "maksimum", "maximum", "máximo"],
   },
@@ -306,27 +178,6 @@ export const COMMAND_ALIASES = {
     pl: ["max_off"],
     en: ["clear_max"],
     de: ["max_aus"],
-  },
-  filtry: {
-    pl: ["filtry"],
-    en: ["filters", "filter"],
-    fr: ["filtres"],
-    it: ["filtri"],
-    es: ["filtros"],
-    pt: ["filtros"],
-  },
-  resetfiltry: {
-    pl: ["resetfiltry"],
-    en: ["resetfilters", "clear_filters"],
-    de: ["filter_zurücksetzen"],
-    fr: ["réinitialiser_filtres"],
-    it: ["ripristina_filtri"],
-    es: ["reiniciar_filtros"],
-    pt: ["redefinir_filtros"],
-    ro: ["resetare_filtre"],
-    nl: ["filters_wissen"],
-    cs: ["resetovat_filtry"],
-    sk: ["resetovat_filtry"],
   },
   etykieta: {
     en: ["etykieta", "label", "etikett", "étiquette", "etichetta", "etiqueta", "rótulo", "etichetă", "label", "štítek"],
@@ -348,7 +199,90 @@ export const COMMAND_ALIASES = {
   },
   debug_worker_links: {
     en: ["debug_worker_links"],
-  },};
+  },
+  // ---------- Admin commands ----------
+  help_admin: {
+    en: ["help_admin"],
+    pl: ["pomoc_admin"],
+    de: ["hilfe_admin"],
+    fr: ["aide_admin"],
+    it: ["aiuto_admin"],
+    es: ["ayuda_admin"],
+    pt: ["ajuda_admin"],
+    cs: ["napoveda_admin"],
+    sk: ["pomoc_admin"],
+    ro: ["ajutor_admin"],
+    nl: ["hulp_admin"],
+  },
+  audit: {
+    en: ["audit"],
+    pl: ["audyt"],
+    de: ["audit"],
+    fr: ["audit"],
+    it: ["audit"],
+    es: ["auditoria"],
+    pt: ["auditoria"],
+    cs: ["audit"],
+    sk: ["audit"],
+    ro: ["audit"],
+    nl: ["audit"],
+  },
+  reset_daily: {
+    en: ["reset_daily"],
+    pl: ["reset_dzienny"],
+    de: ["reset_tag"],
+    fr: ["reset_jour"],
+    it: ["reset_giorno"],
+    es: ["reset_dia"],
+    pt: ["reset_dia"],
+    cs: ["reset_den"],
+    sk: ["reset_den"],
+    ro: ["reset_zi"],
+    nl: ["reset_dag"],
+  },
+  technik: {
+    en: ["tech", "technik"],
+    pl: ["technik"],
+    de: ["technik"],
+    fr: ["tech"],
+    it: ["tech"],
+    es: ["tech"],
+    pt: ["tech"],
+    cs: ["technik"],
+    sk: ["technik"],
+    ro: ["tech"],
+    nl: ["tech"],
+  },
+  daj_admina: {
+    en: ["grant_admin"],
+    pl: ["daj_admina"],
+    de: ["admin_geben"],
+    fr: ["donner_admin"],
+    it: ["dai_admin"],
+    es: ["dar_admin"],
+    pt: ["dar_admin"],
+    cs: ["dej_admina"],
+    sk: ["daj_admina"],
+    ro: ["da_admin"],
+    nl: ["geef_admin"],
+  },
+  usun_uzytkownika: {
+    en: ["delete_user"],
+    pl: ["usun_uzytkownika"],
+    de: ["benutzer_loeschen"],
+    fr: ["supprimer_utilisateur"],
+    it: ["elimina_utente"],
+    es: ["borrar_usuario"],
+    pt: ["apagar_usuario"],
+    cs: ["smazat_uzivatele"],
+    sk: ["zmazat_uzivatela"],
+    ro: ["sterge_utilizator"],
+    nl: ["verwijder_gebruiker"],
+  },
+  debug: {
+    en: ["debug"],
+  },
+};
 
 /**
  * Normalizes user command input to canonical form
@@ -383,4 +317,28 @@ export function normalizeCommand(text) {
   }
   
   return null;
+}
+
+/**
+ * Get primary (first) alias for a command in specified language
+ * @param {string} canonical - Canonical command name (e.g., "usun", "dodaj")
+ * @param {string} lang - Language code (e.g., "de", "fr", "it")
+ * @returns {string} - Primary alias for that language, or canonical if not found
+ */
+export function getPrimaryAlias(canonical, lang) {
+  const langAliases = COMMAND_ALIASES[canonical];
+  if (!langAliases) return canonical;
+  
+  // Try specified language first
+  if (langAliases[lang] && langAliases[lang].length > 0) {
+    return langAliases[lang][0];
+  }
+  
+  // Fall back to EN
+  if (langAliases.en && langAliases.en.length > 0) {
+    return langAliases.en[0];
+  }
+  
+  // Last resort: return canonical
+  return canonical;
 }

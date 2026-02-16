@@ -144,5 +144,86 @@ export function createAdminHandlers({ tgSend, escapeHtml, dbQuery }) {
     }
   }
 
-  return { handleTechnik, handleUsunUzytkownika, handleDajAdmina };
+  // /reset_daily (ADMIN)
+  async function handleResetDaily(msg, user, argText) {
+    const chatId = String(msg.chat.id);
+    const fromId = msg?.from?.id;
+    if (!isAdminTgId(fromId)) {
+      await tgSend(chatId, "⛔ Brak uprawnień (ADMIN).");
+      return;
+    }
+
+    const targetTgId = Number(argText || 0);
+    if (!Number.isFinite(targetTgId) || targetTgId <= 0) {
+      await tgSend(chatId, "Użycie: /reset_daily <telegram_user_id>");
+      return;
+    }
+
+    let userRow;
+    try {
+      const res = await dbQuery(
+        `SELECT id, COALESCE(NULLIF(timezone,''),'Europe/Warsaw') AS tz FROM users WHERE telegram_user_id=$1 LIMIT 1`,
+        [targetTgId]
+      );
+      if (!res.rows.length) {
+        await tgSend(chatId, `ℹ️ Nie znaleziono użytkownika o telegram_user_id=${targetTgId}`);
+        return;
+      }
+      userRow = res.rows[0];
+    } catch (err) {
+      await tgSend(chatId, `❌ Błąd pobierania użytkownika: ${escapeHtml(String(err?.message || err))}`);
+      return;
+    }
+
+    const userId = Number(userRow.id);
+    const tz = userRow.tz || 'Europe/Warsaw';
+
+    let rowCount = 0;
+    try {
+      const updateRes = await dbQuery(
+        `UPDATE public.chat_notifications 
+         SET daily_count=0, 
+             daily_count_date=(NOW() AT TIME ZONE $2)::date, 
+             updated_at=NOW() 
+         WHERE user_id=$1`,
+        [userId, tz]
+      );
+      rowCount = updateRes.rowCount || 0;
+    } catch (err) {
+      await tgSend(chatId, `❌ Błąd resetowania: ${escapeHtml(String(err?.message || err))}`);
+      return;
+    }
+
+    await tgSend(
+      chatId,
+      `✅ Zresetowano dzienny licznik dla tg_user_id=<code>${targetTgId}</code> (user_id=<code>${userId}</code>).\n` +
+      `Rekordy: <b>${rowCount}</b>\n` +
+      `TZ: <code>${escapeHtml(tz)}</code>`
+    );
+  }
+
+  // /help_admin (ADMIN)
+  async function handleHelpAdmin(msg, user) {
+    const chatId = String(msg.chat.id);
+    const fromId = msg?.from?.id;
+    if (!isAdminTgId(fromId)) {
+      await tgSend(chatId, "⛔ Brak uprawnień (ADMIN).");
+      return;
+    }
+
+    const helpText = 
+      `🔒 <b>Komendy administracyjne FindYourDeal</b>\n\n` +
+      `<b>ADMIN</b>\n\n` +
+      `/technik &lt;telegram_user_id&gt; — pokaż mapowanie TG → user_id (diagnostyka)\n\n` +
+      `/debug — informacje diagnostyczne bota (build, hash, uptime, DB)\n\n` +
+      `/debug_worker_links — pokaż linki, które worker realnie skanuje (max 50)\n\n` +
+      `/reset_daily &lt;telegram_user_id&gt; — wyzeruj dzienny licznik powiadomień/ofert użytkownika (globalnie)\n\n` +
+      `<b>SUPERADMIN</b>\n\n` +
+      `/daj_admina &lt;telegram_user_id&gt; — nadaj ADMIN wskazanemu TG userowi\n\n` +
+      `/usun_uzytkownika &lt;telegram_user_id&gt; — usuń użytkownika i wszystkie dane (NIEODWRACALNE)`;
+
+    await tgSend(chatId, helpText);
+  }
+
+  return { handleTechnik, handleUsunUzytkownika, handleDajAdmina, handleResetDaily, handleHelpAdmin };
 }

@@ -1754,7 +1754,14 @@ async function processLink(link) {
   );
 
   const cfg = getSourceConfig(source);
-  const maxPerLoop = Number(limits?.max_items_per_link_per_loop || cfg.maxPerLoop);
+  const planLimit = Number(limits?.max_items_per_link_per_loop || cfg.maxPerLoop);
+  const linkLimit = link.max_items_per_loop != null ? Number(link.max_items_per_loop) : null;
+  
+  // Use link-specific limit if set, otherwise use plan limit
+  const maxPerLoop = linkLimit !== null && Number.isFinite(linkLimit) && linkLimit > 0 
+    ? linkLimit 
+    : planLimit;
+    
   const minBatchItems = cfg.minBatchItems;
 
   const filters = safeParseFilters(link.filters);

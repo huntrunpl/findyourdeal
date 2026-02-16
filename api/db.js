@@ -188,6 +188,12 @@ export async function initDb() {
     ADD COLUMN IF NOT EXISTS notify_from TIMESTAMPTZ NOT NULL DEFAULT NOW();
   `);
 
+  // per-link item limit per worker loop
+  await pool.query(`
+    ALTER TABLE links
+    ADD COLUMN IF NOT EXISTS max_items_per_loop INTEGER NULL;
+  `);
+
   // historia faktycznie wysłanych ofert (SoT dla limitów i komend historii)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sent_offers (
@@ -218,6 +224,45 @@ export async function initDb() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS sent_offers_price_sort_idx
     ON sent_offers (user_id, chat_id, sent_at DESC, price ASC);
+  `);
+
+  // Admin audit log (KROK 6)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.admin_audit_log (
+      id BIGSERIAL PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+      action TEXT NOT NULL,
+      status TEXT NOT NULL,
+      reason TEXT NULL,
+
+      caller_tg_id BIGINT NOT NULL,
+      caller_user_id BIGINT NULL,
+      caller_role TEXT NULL,
+
+      target_tg_id BIGINT NULL,
+      target_user_id BIGINT NULL,
+
+      chat_id BIGINT NULL,
+      message_id BIGINT NULL,
+
+      payload JSONB NULL
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_log_created_at
+    ON public.admin_audit_log(created_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_log_action
+    ON public.admin_audit_log(action);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_log_target_tg
+    ON public.admin_audit_log(target_tg_id);
   `);
 }
 
@@ -580,7 +625,7 @@ function __fydParsePrice(raw) {
 export async function getLinksForWorker() {
   const q = await pool.query(
     `
-    SELECT id, user_id, name, url, source, active, chat_id, thread_id, last_key, filters
+    SELECT id, user_id, name, url, source, active, chat_id, thread_id, last_key, filters, max_items_per_loop
     FROM links
     WHERE active = TRUE
     ORDER BY id ASC
@@ -725,3 +770,72 @@ export async function disableQuietHours(chatId) {
   return q.rows[0] || null;
 }
 
+// =======================
+// Admin audit log (KROK 6)
+// =======================
+export async function logAdminAudit({
+  action,
+  status,
+  reason = null,
+  callerTgId,
+  callerUserId = null,
+  callerRole = null,
+  targetTgId = null,
+  targetUserId = null,
+  chatId = null,
+  messageId = null,
+  payload = null
+}) {
+  try {
+    await pool.query(
+      `
+      INSERT INTO public.admin_audit_log (
+        action, status, reason,
+        caller_tg_id, caller_user_id, caller_role,
+        target_tg_id, target_user_id,
+        chat_id, message_id,
+        payload
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `,
+      [
+        action,
+        status,
+        reason,
+        callerTgId ? Number(callerTgId) : null,
+        callerUserId ? Number(callerUserId) : null,
+        callerRole,
+        targetTgId ? Number(targetTgId) : null,
+        targetUserId ? Number(targetUserId) : null,
+        chatId ? Number(chatId) : null,
+        messageId ? Number(messageId) : null,
+        payload ? JSON.stringify(payload) : null
+      ]
+    );
+  } catch (err) {
+    // Log error but don't crash the command
+    console.error("[AUDIT_LOG_ERROR]", err?.stack || err);
+  }
+}
+// =======================
+// Admin audit log cleanup (KROK 6.2)
+// =======================
+export async function cleanupAuditLog(retentionDays = 180) {
+  try {
+    const result = await pool.query(
+      `DELETE FROM public.admin_audit_log WHERE created_at < NOW() - INTERVAL '${retentionDays} days'`
+    );
+    const deletedRows = result.rowCount || 0;
+    
+    if (deletedRows > 0) {
+      console.log(`[AUDIT_CLEANUP] Deleted ${deletedRows} audit log entries older than ${retentionDays} days`);
+    } else {
+      console.log(`[AUDIT_CLEANUP] No audit log entries to delete (retention: ${retentionDays} days)`);
+    }
+    
+    return deletedRows;
+  } catch (err) {
+    console.error("[AUDIT_CLEANUP_ERROR]", err?.stack || err);
+    return 0;
+  }
+}

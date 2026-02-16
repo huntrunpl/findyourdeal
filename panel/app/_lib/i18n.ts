@@ -99,7 +99,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     tg_cmd_onoff: "/on / /off — enable/disable notifications in this chat",
     tg_cmd_mode: "/pojedyncze / /zbiorcze — notification mode in this chat",
     tg_cmd_mode_id:
-      "/pojedyncze_ID / /zbiorcze_ID / /off_ID / /on_ID — settings for a specific link",
+      "/pojedyncze ID / /zbiorcze ID / /off ID / /on ID — settings for a specific link",
 
     chat_status_prefix: "Chat status:",
     chat_mode_prefix: "chat mode:",
@@ -221,7 +221,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     tg_cmd_onoff: "/on / /off — włącz/wyłącz powiadomienia na czacie",
     tg_cmd_mode: "/pojedyncze / /zbiorcze — tryb powiadomień na czacie",
     tg_cmd_mode_id:
-      "/pojedyncze_ID / /zbiorcze_ID / /off_ID / /on_ID — ustawienia dla konkretnego linku",
+      "/pojedyncze ID / /zbiorcze ID / /off ID / /on ID — ustawienia dla konkretnego linku",
 
     chat_status_prefix: "Status czatu:",
     chat_mode_prefix: "tryb czatu:",
@@ -351,7 +351,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     tg_cmd_onoff: "/on / /off — Benachrichtigungen im Chat an/aus",
     tg_cmd_mode: "/pojedyncze / /zbiorcze — Benachrichtigungsmodus im Chat",
     tg_cmd_mode_id:
-      "/pojedyncze_ID / /zbiorcze_ID / /off_ID / /on_ID — Einstellungen für einen Link",
+      "/pojedyncze ID / /zbiorcze ID / /off ID / /on ID — Einstellungen für einen Link",
 
     chat_status_prefix: "Chat-Status:",
     chat_mode_prefix: "Chat-Modus:",
@@ -485,7 +485,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     tg_cmd_mode:
       "/pojedyncze / /zbiorcze — mode des notifications dans ce chat",
     tg_cmd_mode_id:
-      "/pojedyncze_ID / /zbiorcze_ID / /off_ID / /on_ID — paramètres pour un lien",
+      "/pojedyncze ID / /zbiorcze ID / /off ID / /on ID — paramètres pour un lien",
 
     chat_status_prefix: "Statut du chat :",
     chat_mode_prefix: "mode du chat :",
@@ -620,7 +620,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     tg_cmd_mode:
       "/pojedyncze / /zbiorcze — modo de notificaciones en este chat",
     tg_cmd_mode_id:
-      "/pojedyncze_ID / /zbiorcze_ID / /off_ID / /on_ID — ajustes para un enlace",
+      "/pojedyncze ID / /zbiorcze ID / /off ID / /on ID — ajustes para un enlace",
 
     chat_status_prefix: "Estado del chat:",
     chat_mode_prefix: "modo del chat:",
@@ -754,7 +754,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     tg_cmd_mode:
       "/pojedyncze / /zbiorcze — modalità notifiche in questa chat",
     tg_cmd_mode_id:
-      "/pojedyncze_ID / /zbiorcze_ID / /off_ID / /on_ID — impostazioni per un link",
+      "/pojedyncze ID / /zbiorcze ID / /off ID / /on ID — impostazioni per un link",
 
     chat_status_prefix: "Stato chat:",
     chat_mode_prefix: "modalità chat:",
@@ -888,7 +888,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     tg_cmd_mode:
       "/pojedyncze / /zbiorcze — modo de notificações neste chat",
     tg_cmd_mode_id:
-      "/pojedyncze_ID / /zbiorcze_ID / /off_ID / /on_ID — definições para um link",
+      "/pojedyncze ID / /zbiorcze ID / /off ID / /on ID — definições para um link",
 
     chat_status_prefix: "Estado do chat:",
     chat_mode_prefix: "modo do chat:",
@@ -1019,7 +1019,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     tg_cmd_onoff: "/on / /off — pornește/oprește notificările în chat",
     tg_cmd_mode: "/pojedyncze / /zbiorcze — modul notificărilor în chat",
     tg_cmd_mode_id:
-      "/pojedyncze_ID / /zbiorcze_ID / /off_ID / /on_ID — setări pentru un link",
+      "/pojedyncze ID / /zbiorcze ID / /off ID / /on ID — setări pentru un link",
 
     chat_status_prefix: "Stare chat:",
     chat_mode_prefix: "mod chat:",
@@ -1129,7 +1129,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     tg_cmd_onoff: "/on / /off — meldingen in deze chat aan/uit",
     tg_cmd_mode: "/pojedyncze / /zbiorcze — meldingsmodus in deze chat",
     tg_cmd_mode_id:
-      "/pojedyncze_ID / /zbiorcze_ID / /off_ID / /on_ID — instellingen per link",
+      "/pojedyncze ID / /zbiorcze ID / /off ID / /on ID — instellingen per link",
 
     chat_status_prefix: "Chatstatus:",
     chat_mode_prefix: "chatmodus:",
@@ -1260,7 +1260,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     tg_cmd_onoff: "/on / /off — zapnout/vypnout oznámení v chatu",
     tg_cmd_mode: "/pojedyncze / /zbiorcze — režim oznámení v chatu",
     tg_cmd_mode_id:
-      "/pojedyncze_ID / /zbiorcze_ID / /off_ID / /on_ID — nastavení pro konkrétní odkaz",
+      "/pojedyncze ID / /zbiorcze ID / /off ID / /on ID — nastavení pro konkrétní odkaz",
 
     chat_status_prefix: "Stav chatu:",
     chat_mode_prefix: "režim chatu:",
@@ -1391,7 +1391,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     tg_cmd_onoff: "/on / /off — zapnúť/vypnúť notifikácie v chate",
     tg_cmd_mode: "/pojedyncze / /zbiorcze — režim notifikácií v chate",
     tg_cmd_mode_id:
-      "/pojedyncze_ID / /zbiorcze_ID / /off_ID / /on_ID — nastavenia pre konkrétny link",
+      "/pojedyncze ID / /zbiorcze ID / /off ID / /on ID — nastavenia pre konkrétny link",
 
     chat_status_prefix: "Stav chatu:",
     chat_mode_prefix: "režim chatu:",
