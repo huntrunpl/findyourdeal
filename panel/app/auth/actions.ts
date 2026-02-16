@@ -64,7 +64,9 @@ export async function setUserLangAction(lang: string): Promise<{ ok: boolean; la
     const next = normLang(lang);
     console.log("[setUserLangAction] Updating user", userId, "to lang", next);
     
-    const result = await pool.query(`UPDATE users SET lang=$1, language_code=$1, language=$1 WHERE id=$2`, [next, userId]);
+    // SoT: tylko users.lang
+    // language_code i language to legacy (trigger DB je zsynchronizuje)
+    const result = await pool.query(`UPDATE users SET lang=$1 WHERE id=$2`, [next, userId]);
     console.log("[setUserLangAction] Update result:", result.rowCount, "rows affected");
 
     return { ok: true, lang: next };

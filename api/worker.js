@@ -1,342 +1,7 @@
-import "./env.js";
-import { createVintedNormalize } from "./src/worker/vinted-normalize.js";
-// __FYD_VINTED_TITLE_FROM_URL_V2__
-const __vintedN = createVintedNormalize({ normalizeKey: (...a) => normalizeKey(...a) });
-const __fydDeriveVintedTitleFromUrl = __vintedN.deriveVintedTitleFromUrl;
-const __fydEnsureVintedItemFields = __vintedN.ensureVintedItemFields;
-const __fydFixVintedItems = __vintedN.fixVintedItems;
-
-
-// ---- FYD_LINK_FILTERS_V2 (auto) ----
-function __fydToNumber(x) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : NaN;
-}
-
-function __fydNormalizeItemKeyFromUrl(u) {
-  const s = String(u || "").trim();
-  if (!s) return "";
-  const lower = s.toLowerCase();
-
-  // Vinted: /items/<numeric-id>
-  if (lower.includes("vinted.") && lower.includes("/items/")) {
-    const m = s.match(/\/items\/(\d+)/i);
-    if (m && m[1]) return `vinted:${m[1]}`;
-  }
-
-  // OLX: ...-IDxxxxxx.html
-  if (lower.includes("olx.") && lower.includes("/oferta/")) {
-    const m = s.match(/-ID([0-9A-Za-z]+)\.html/i);
-    if (m && m[1]) return `olx:${m[1]}`;
-  }
-
-  // fallback: bez query/hash
-  return s.split("#")[0].split("?")[0];
-}
-
-function __fydParsePriceRange(linkUrl) {
-  const out = { hasAny: false, from: NaN, to: NaN };
-  try {
-    const u = new URL(String(linkUrl || ""));
-    const sp = u.searchParams;
-
-    // Vinted
-    const vFrom = sp.get("price_from");
-    const vTo   = sp.get("price_to");
-
-    // OLX (URLSearchParams dekoduje %5B %5D)
-    const oFrom = sp.get("search[filter_float_price:from]");
-    const oTo   = sp.get("search[filter_float_price:to]");
-
-    const fromRaw = (vFrom != null && vFrom !== "") ? vFrom : ((oFrom != null && oFrom !== "") ? oFrom : "");
-    const toRaw   = (vTo   != null && vTo   !== "") ? vTo   : ((oTo   != null && oTo   !== "") ? oTo   : "");
-
-    const f = __fydToNumber(fromRaw);
-    const t = __fydToNumber(toRaw);
-
-    if (Number.isFinite(f)) out.from = f;
-    if (Number.isFinite(t)) out.to = t;
-
-    out.hasAny = Number.isFinite(out.from) || Number.isFinite(out.to);
-  } catch {}
-  return out;
-}
-
-function __fydFilterAndNormalizeItems(linkUrl, items) {
-  const r = __fydParsePriceRange(linkUrl);
-  const out = [];
-  for (const it0 of (items || [])) {
-    const it = it0 || {};
-    const u = it.url || it.item_key || "";
-    const nk = __fydNormalizeItemKeyFromUrl(u);
-    if (!nk) continue;
-    it.item_key = nk;
-
-    if (r.hasAny) {
-      const p = __fydToNumber(it.price);
-      if (!Number.isFinite(p)) continue;
-      if (Number.isFinite(r.from) && p < r.from) continue;
-      if (Number.isFinite(r.to) && p > r.to) continue;
-    }
-    out.push(it);
-  }
-  return out;
-}
-
-function __fydRefreshVintedTime(linkUrl) {
-  try {
-    const u = new URL(String(linkUrl || ""));
-    if (!u.hostname.toLowerCase().includes("vinted.")) return String(linkUrl || "");
-    if (u.searchParams.has("time")) {
-      u.searchParams.set("time", String(Math.floor(Date.now() / 1000)));
-    }
-    return u.toString();
-  } catch {
-    return String(linkUrl || "");
-  }
-}
-// ---- /FYD_LINK_FILTERS_V2 ----
-
-// ---- Proxy flag helper (shared) ----
-function __fydProxyEnabledBool() {
-  const v = String(process.env.PROXY_ENABLED || "").trim().toLowerCase();
-  const srv = String(process.env.PROXY_SERVER || "").trim();
-  if (!srv) return false;
-  return v === "1" || v === "true" || v === "yes";
-}
-
-
-
-
-
-
-
-// ---- OLX CloudFront backoff (global) ----
-if (globalThis.__olxBackoffUntil == null) globalThis.__olxBackoffUntil = 0;
-if (globalThis.__olxCloudfrontHits == null) globalThis.__olxCloudfrontHits = 0;
-// ---- OLX CloudFront backoff END ----
-// ---- FORCE OLX WWW (disable m.olx.pl) ----
-function __fixOlxUrl(u) {
-  const s = String(u || "");
-  if (!s.includes("olx.pl")) return s;
-  try {
-    const x = new URL(s);
-    if (x.hostname === "m.olx.pl") x.hostname = "www.olx.pl";
-    return x.toString();
-  } catch {
-    return s
-      .replace("://m.olx.pl", "://www.olx.pl")
-      .replace("//m.olx.pl", "//www.olx.pl");
-  }
-}
-// ---- FORCE OLX WWW END ----
-// ---- PROXY config (worker) ----
-const PROXY = (() => {
-  const enabled = String(process.env.PROXY_ENABLED || "").trim();
-  if (!enabled || enabled === "0" || enabled.toLowerCase() === "false") return null;
-
-  // prefer full server url if provided
-  let server = String(process.env.PROXY_SERVER || "").trim();
-
-  // else build from host+port
-  const host = String(process.env.PROXY_HOST || "").trim();
-  const port = String(process.env.PROXY_PORT || "").trim();
-    if (!server && host && port) server = `http://${host}:${port}`;
-  if (!server) return null;
-
-  const username = String(process.env.PROXY_USERNAME || process.env.PROXY_USER || "").trim();
-  const password = String(process.env.PROXY_PASSWORD || process.env.PROXY_PASS || "").trim();
-
-  const proxy = { server };
-  if (username) proxy.username = username;
-  if (password) proxy.password = password;
-  return proxy;
-})();
-
-
-
-
-// __FYD_OUTGOING_TEXT_FIX_V1__
-function __fydAppendVintedUrl(url) {
-  // FYD FIX: nie zmieniamy parametrów linku (OLX/Vinted) – URL ma być 1:1
-  return String(url || "").trim();
-}
-
-
-function __fydAppendUrlFromKeyboard(text, payload) {
-  try {
-    text = String(text ?? "");
-    if (text.includes("http://") || text.includes("https://")) return text;
-
-    const kb = payload && payload.reply_markup && payload.reply_markup.inline_keyboard;
-    if (!Array.isArray(kb)) return text;
-
-    for (const row of kb) {
-      if (!Array.isArray(row)) continue;
-      for (const btn of row) {
-        const u = btn && typeof btn.url === "string" ? btn.url : "";
-        if (u.startsWith("http://") || u.startsWith("https://")) {
-          return text + "\n" + u;
-        }
-      }
-    }
-    return text;
-  } catch {
-    return String(text ?? "");
-  }
-}
-
-function __fydFixOutgoingText(text, payload) {
-  text = __fydAppendVintedUrl(text);
-  text = __fydAppendUrlFromKeyboard(text, payload);
-  return text;
-}
+import dotenv from "dotenv";
+dotenv.config();
 
 import { chromium, request } from "playwright";
-
-/* __FYD_PW_PROXY_PREAUTH_V1__ */
-import * as http from "http";
-import * as net from "net";
-
-/* __FYD_PW_PREAUTH_CACHE_WRAP_V1__ */
-let __FYD_PW_PREAUTH_CACHE = null;
-let __FYD_PW_PREAUTH_INFLIGHT = null;
-/* __FYD_PW_PREAUTH_CACHE_V3__ */
-let __FYD_PW_PREAUTH_PROMISE_V3 = null;
-async function __fydStartPreauthProxyIfNeeded() {
-  // __FYD_PREAUTH_HARD_DISABLED
-  return null;
-
-  /* __FYD_DISABLE_PW_PREAUTH_V1__ */
-  // Disabled: prevents spawning local playwright-preauth proxy per request.
-  // We rely on Playwright's native proxy auth via launchOpts.proxy (server/username/password).
-  return null;
-
-  if (__FYD_PW_PREAUTH_PROMISE_V3) return await __FYD_PW_PREAUTH_PROMISE_V3;
-  __FYD_PW_PREAUTH_PROMISE_V3 = (async () => {
-    try { return await __fydStartPreauthProxyIfNeeded__impl(); } catch { return null; }
-  })();
-  return await __FYD_PW_PREAUTH_PROMISE_V3;
-}
-
-async function __fydStartPreauthProxyIfNeeded__impl() {
-  if (__FYD_PW_PREAUTH_CACHE) return __FYD_PW_PREAUTH_CACHE;
-  if (__FYD_PW_PREAUTH_INFLIGHT) return await __FYD_PW_PREAUTH_INFLIGHT;
-  __FYD_PW_PREAUTH_INFLIGHT = (async () => {
-    const r = await __fydStartPreauthProxyIfNeeded__orig();
-    if (r && r.server) __FYD_PW_PREAUTH_CACHE = r;
-    return r;
-  })();
-  try { return await __FYD_PW_PREAUTH_INFLIGHT; }
-  finally { __FYD_PW_PREAUTH_INFLIGHT = null; }
-}
-
-/* __FYD_PW_PREAUTH_SINGLETON_FROM_LOG_V5__ */
-
-async function __fydStartPreauthProxyIfNeeded__orig(...__args) {
-
-  const g = globalThis;
-
-  if (g.__FYD_PW_PREAUTH_SINGLETON_V5_RESULT) return g.__FYD_PW_PREAUTH_SINGLETON_V5_RESULT;
-
-  if (g.__FYD_PW_PREAUTH_SINGLETON_V5_PROMISE) return await g.__FYD_PW_PREAUTH_SINGLETON_V5_PROMISE;
-
-  g.__FYD_PW_PREAUTH_SINGLETON_V5_PROMISE = (async () => {
-
-    const r = await __fydStartPreauthProxyIfNeeded__orig__impl(...__args);
-
-    g.__FYD_PW_PREAUTH_SINGLETON_V5_RESULT = r;
-
-    return r;
-
-  })();
-
-  return await g.__FYD_PW_PREAUTH_SINGLETON_V5_PROMISE;
-
-}
-
-
-async function __fydStartPreauthProxyIfNeeded__orig__impl() {
-  const en = (() => { const v = String(process.env.PROXY_ENABLED || "").trim().toLowerCase(); return (v === "1" || v === "true" || v === "yes") ? "true" : ""; })();if (!["1", "true", "yes", "on"].includes(en)) return null;
-
-  const upstream = String(process.env.PROXY_SERVER || "").trim();
-  const user = String(process.env.PROXY_USERNAME || process.env.PROXY_USER || "").trim();
-  const pass = String(process.env.PROXY_PASSWORD || process.env.PROXY_PASS || "").trim();
-
-  if (!upstream || !user || !pass) return null;
-
-  if (/^socks5:\/\//i.test(upstream)) {
-    console.warn("[proxy] PROXY_SERVER=socks5://... — Chromium nie wspiera socks5 auth. Ustaw PROXY_SERVER na http://host:port");
-    return null;
-  }
-
-  let U;
-  try {
-    U = new URL(upstream);
-  } catch {
-    console.warn("[proxy] zły PROXY_SERVER:", upstream);
-    return null;
-  }
-
-  const host = U.hostname;
-  const port = Number(U.port || 80);
-  const auth = Buffer.from(user + ":" + pass).toString("base64");
-
-  const srv = http.createServer();
-
-  srv.on("connect", (req, clientSocket, head) => {
-    const [dstHost, dstPortRaw] = String(req.url || "").split(":");
-    const dstPort = Number(dstPortRaw || 443);
-
-    const upstreamSocket = net.connect(port, host, () => {
-      upstreamSocket.write(
-        "CONNECT " + dstHost + ":" + dstPort + " HTTP/1.1\r\n" +
-          "Host: " + dstHost + ":" + dstPort + "\r\n" +
-          "Proxy-Authorization: Basic " + auth + "\r\n" +
-          "Connection: keep-alive\r\n\r\n"
-      );
-    });
-
-    upstreamSocket.once("data", (chunk) => {
-      const s = chunk.toString("utf8");
-      if (!/^HTTP\/1\.[01]\s+200\b/i.test(s)) {
-        try {
-          clientSocket.write("HTTP/1.1 502 Bad Gateway\r\n\r\n");
-        } catch {}
-        clientSocket.destroy();
-        upstreamSocket.destroy();
-        return;
-      }
-
-      try {
-        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      } catch {}
-      if (head && head.length) upstreamSocket.write(head);
-
-      clientSocket.pipe(upstreamSocket);
-      upstreamSocket.pipe(clientSocket);
-    });
-
-    upstreamSocket.on("error", () => {
-      try {
-        clientSocket.destroy();
-      } catch {}
-    });
-    clientSocket.on("error", () => {
-      try {
-        upstreamSocket.destroy();
-      } catch {}
-    });
-  });
-
-  await new Promise((res) => srv.listen(0, "127.0.0.1", res));
-  const localPort = srv.address().port;
-  const localServer = "http://127.0.0.1:" + localPort;
-
-  console.log("[proxy] playwright-preauth local=" + localServer + " upstream=" + upstream);
-  return { server: localServer, _srv: srv };
-}
-
 import {
   initDb,
   getLinksForWorker,
@@ -345,566 +10,152 @@ import {
   updateLastKey,
   pruneLinkItems,
 } from "./db.js";
-import _fetch from "node-fetch";
+
+import fetch from "node-fetch";
 import pg from "pg";
 
 const { Pool } = pg;
 
-// Osobny pool tylko do chat_notifications / link_notification_modes / limity dzienne
+// Osobny pool tylko do chat_notifications / link_notification_modes
 const notifyPool = process.env.DATABASE_URL
   ? new Pool({ connectionString: process.env.DATABASE_URL })
   : new Pool();
 
-// ---- FYD helpers (restored) ----
-
-// ---- key normalization (restored) ----
-function cleanKey(x) {
-  if (x === null || x === undefined) return "";
-  const s = String(x).trim();
-  if (!s) return "";
-  try {
-    if (s.startsWith("http://") || s.startsWith("https://")) {
-      const u = new URL(s);
-      u.hash = "";
-      u.search = "";
-      return u.toString();
-    }
-  } catch {}
-  return s;
-}
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function __fydParseFeatureValue(v) {
-  if (v === null || v === undefined) return null;
-  const s = String(v).trim();
-  if (s === "true") return true;
-  if (s === "false") return false;
-  if (s !== "" && /^[0-9]+$/.test(s)) return Number(s);
-  if ((s.startsWith("{") && s.endsWith("}")) || (s.startsWith("[") && s.endsWith("]"))) {
-    try { return JSON.parse(s); } catch {}
-  }
-  return v;
-}
-
-async function getUserLimits(telegramUserId) {
-  try {
-    const tgid = Number(telegramUserId);
-    if (!Number.isFinite(tgid) || tgid <= 0) return null;
-
-    const subQ = `
-      SELECT u.id AS user_id,
-             COALESCE(p.code, 'free') AS plan_code,
-             COALESCE(s.addon_qty, 0) AS addon_qty
-      FROM users u
-      LEFT JOIN LATERAL (
-        SELECT *
-        FROM subscriptions
-        WHERE user_id = u.id AND status = 'active'
-        ORDER BY id DESC
-        LIMIT 1
-      ) s ON true
-      LEFT JOIN plans p ON p.id = s.plan_id
-      WHERE u.telegram_user_id = $1
-      LIMIT 1
-    `;
-    const subR = await notifyPool.query(subQ, [tgid]);
-    const row = subR?.rows?.[0];
-    if (!row) return null;
-
-    const planCode = String(row.plan_code || "free");
-    const addonQty = Number(row.addon_qty || 0);
-
-    const pfQ = `
-      SELECT pf.feature_key, pf.feature_value
-      FROM plan_features pf
-      JOIN plans p ON p.id = pf.plan_id
-      WHERE p.code = $1
-      ORDER BY pf.feature_key
-    `;
-    const pfR = await notifyPool.query(pfQ, [planCode]);
-
-    const limits = { plan_code: planCode, addon_qty: addonQty };
-    for (const r of (pfR?.rows || [])) {
-      limits[r.feature_key] = __fydParseFeatureValue(r.feature_value);
-    }
-    return limits;
-  } catch {
-    return null;
-  }
-}
-// ---- FYD helpers (restored) END ----
-
-
-// __FYD_TG_WRAPPED_FETCH_V2
-const __FYD_TG_LANG_CACHE = new Map(); // chat_id -> { lang, ts }
-
-async function __fydLangForChat(chatId) {
-  const cid = Number(chatId);
-  if (!Number.isFinite(cid)) return "en";
-  const now = Date.now();
-  const hit = __FYD_TG_LANG_CACHE.get(cid);
-  if (hit && (now - hit.ts) < 60000) return hit.lang;
-
-  let lang = "";
-
-  // 1) per-chat (grupy też)
-  try {
-    const r = await notifyPool.query("SELECT language AS lang FROM public.chat_notifications WHERE chat_id=$1 LIMIT 1", [cid]);
-    if (r?.rows?.[0]?.lang) lang = String(r.rows[0].lang);
-  } catch {}
-
-  // 2) fallback -> users.lang
-  if (!lang) {
-    try {
-      const r = await notifyPool.query("SELECT language AS lang FROM public.users WHERE telegram_user_id=$1 LIMIT 1", [cid]);
-      if (r?.rows?.[0]?.lang) lang = String(r.rows[0].lang);
-    } catch {}
-  }
-
-  const raw = String(lang || "").trim().toLowerCase();
-  const base = raw.includes("-") ? raw.split("-")[0] : raw;
-  const out = base || "en";
-  __FYD_TG_LANG_CACHE.set(cid, { lang: out, ts: now });
-  return out;
-}
-
-function __fydBtn(lang, key) {
-  const L = String(lang || "en");
-  const d = {
-    en: { disable:"Disable this link", single:"Single", batch:"Batch" },
-    pl: { disable:"Wyłącz ten link", single:"Pojedynczo", batch:"Zbiorczo" },
-    cs: { disable:"Vypnout tento odkaz", single:"Jednotlivě", batch:"Hromadně" },
-  };
-  const pack = d[L] || d.en;
-  return pack[key] || d.en[key] || String(key);
-}
-
-function __fydStripIcons(t) {
-  return String(t || "").replace(/^[^\p{L}\p{N}]+/gu, "").trim();
-}
-function __fydIsDisable(t) {
-  t = t.toLowerCase();
-  return t.includes("wyłącz") || t.includes("wylacz") || t.includes("disable") || t.includes("vypnout");
-}
-function __fydIsSingle(t) {
-  t = t.toLowerCase();
-  return t.includes("pojedyncz") || t.includes("single") || t.includes("jednotliv");
-}
-function __fydIsBatch(t) {
-  t = t.toLowerCase();
-  return t.includes("zbiorcz") || t.includes("batch") || t.includes("hromad");
-}
-
-function __fydNormalizeInlineKeyboard(obj, lang) {
-  if (!obj || !Array.isArray(obj.inline_keyboard)) return obj;
-  for (const row of obj.inline_keyboard) {
-    if (!Array.isArray(row)) continue;
-    for (const btn of row) {
-      if (!btn || typeof btn !== "object" || typeof btn.text !== "string") continue;
-      const base = __fydStripIcons(btn.text);
-      if (__fydIsDisable(base)) btn.text = __fydBtn(lang, "disable");
-      else if (__fydIsSingle(base)) btn.text = __fydBtn(lang, "single");
-      else if (__fydIsBatch(base)) btn.text = __fydBtn(lang, "batch");
-    }
-  }
-  return obj;
-}
-
-function __isFormData(body) {
-  return body && typeof body === "object"
-    && typeof body.get === "function"
-    && typeof body.set === "function"
-    && typeof body.entries === "function";
-}
-
-function __fydParseBodyToPayload(opts) {
-  const headers = (opts && opts.headers) ? opts.headers : {};
-  const body = opts ? opts.body : undefined;
-
-  if (__isFormData(body)) return { mode: "formdata", payload: null };
-
-  if (typeof body === "string") {
-    try {
-      const obj = JSON.parse(body);
-      return { mode: "json", payload: obj };
-    } catch {}
-    try {
-      const params = new URLSearchParams(body);
-      const obj = Object.fromEntries(params.entries());
-      return { mode: "urlencoded", payload: obj };
-    } catch {}
-    return null;
-  }
-
-  try {
-    if (body && typeof body === "object" && body.constructor && body.constructor.name === "URLSearchParams") {
-      const obj = Object.fromEntries(body.entries());
-      return { mode: "urlencoded", payload: obj };
-    }
-  } catch {}
-
-  return null;
-}
-
-function __fydWritePayload(opts, mode, payload) {
-  const nopts = Object.assign({}, opts || {});
-  if (mode === "json") {
-    nopts.body = JSON.stringify(payload);
-    return nopts;
-  }
-  if (payload && typeof payload.reply_markup === "object") {
-    payload.reply_markup = JSON.stringify(payload.reply_markup);
-  }
-  nopts.body = new URLSearchParams(payload).toString();
-  return nopts;
-}
-
-// UWAGA: od tego miejsca cała reszta pliku używa `fetch` -> idzie przez tę bramkę
-const fetch = async (url, opts) => {
-  const u = String(url || "");
-  if (!u.includes("api.telegram.org")) return _fetch(url, opts);
-
-  const method = String((opts && opts.method) ? opts.method : "GET").toUpperCase();
-  if (method !== "POST") return _fetch(url, opts);
-
-  // 1) FormData (sendPhoto / media) — tu V1 przegrywał
-  const body = opts ? opts.body : undefined;
-  if (__isFormData(body)) {
-    const chatId = body.get("chat_id");
-    const lang = await __fydLangForChat(chatId);
-
-    const rm = body.get("reply_markup");
-    if (rm && typeof rm === "string") {
-      try {
-        const obj = JSON.parse(rm);
-        body.set("reply_markup", JSON.stringify(__fydNormalizeInlineKeyboard(obj, lang)));
-      } catch {}
-    }
-
-    // preview ON dla sendMessage, jeśli akurat idzie FormData
-    if (u.includes("/sendMessage")) {
-      try { body.set("disable_web_page_preview", "false"); } catch {}
-      try { body.set("link_preview_options", JSON.stringify({ is_disabled: false })); } catch {}
-    }
-
-    return _fetch(url, opts);
-  }
-
-  // 2) JSON / urlencoded
-  const parsed = __fydParseBodyToPayload(opts);
-  if (!parsed || (parsed.mode !== "json" && parsed.mode !== "urlencoded")) return _fetch(url, opts);
-
-  const payload = parsed.payload;
-  if (!payload || typeof payload !== "object") return _fetch(url, opts);
-
-  const lang = await __fydLangForChat(payload.chat_id);
-
-  if (u.includes("/sendMessage")) {
-    payload.disable_web_page_preview = false;
-    payload.link_preview_options = { is_disabled: false };
-  }
-
-  if (payload.reply_markup) {
-    if (typeof payload.reply_markup === "string") {
-      try {
-        const obj = JSON.parse(payload.reply_markup);
-        payload.reply_markup = JSON.stringify(__fydNormalizeInlineKeyboard(obj, lang));
-      } catch {}
-    } else if (typeof payload.reply_markup === "object") {
-      payload.reply_markup = __fydNormalizeInlineKeyboard(payload.reply_markup, lang);
-    }
-  }
-
-  const nopts = __fydWritePayload(opts, parsed.mode, payload);
-  return _fetch(url, nopts);
-};
 // =================== KONFIG TELEGRAM / WORKER ===================
 
-// ---- FYD_ITEMKEY_NORM_V2 ----
-function __fydNormalizeKey(raw) {
-  const s = String(raw || "").trim();
-  if (!s) return "";
-  const lower = s.toLowerCase();
-
-  // already normalized
-  if (lower.startsWith("vinted:") || lower.startsWith("olx:")) return s;
-
-  // Vinted: /items/<numeric-id>
-  if (lower.includes("vinted.") && lower.includes("/items/")) {
-    const m = s.match(/\/items\/(\d+)/i);
-    if (m && m[1]) return `vinted:${m[1]}`;
-  }
-
-  // OLX: ...-ID<alnum>.html
-  if (lower.includes("olx.") && lower.includes("-id")) {
-    const m = s.match(/-ID([0-9A-Za-z]+)\.html/i);
-    if (m && m[1]) return `olx:${m[1]}`;
-  }
-
-  // fallback: strip query/hash
-  return s.replace(/[?#].*$/, "");
-}
-
-function __fydNormalizeKeys(arr) {
-  return (Array.isArray(arr) ? arr : []).map(__fydNormalizeKey).filter(Boolean);
-}
-
-function __fydNormalizeItems(items) {
-  const out = [];
-  for (const it of (Array.isArray(items) ? items : [])) {
-    const url = (it && (it.url || it.item_key || it.itemKey)) || "";
-    const nk = __fydNormalizeKey(url);
-    if (!nk) continue;
-    out.push({ ...it, item_key: nk });
-  }
-  return out;
-}
-// ---- FYD_ITEMKEY_NORM_V2 END ----
-
-
-
-// __FYD_WORKER_TG_OUTBOUND_NORM_V2
-async function __fydLangForChatWorker(chatId) {
-  let lang = "en";
-  try {
-    const cid = Number(chatId);
-    if (Number.isFinite(cid) && cid > 0) {
-      // private chat: chat_id == telegram_user_id
-      const r = await notifyPool.query("SELECT language AS lang FROM public.users WHERE telegram_user_id=$1 LIMIT 1", [cid]);
-      if (r?.rows?.[0]?.lang) lang = String(r.rows[0].lang);
-    }
-  } catch {}
-  const raw = String(lang || "").trim().toLowerCase();
-  const base = raw.includes("-") ? raw.split("-")[0] : raw;
-  return base || "en";
-}
-
-function __fydTWorker(lang, key) {
-  const L = String(lang || "en");
-  const d = {
-    en: { disable:"Disable this link", single:"Single", batch:"Batch" },
-    pl: { disable:"Wyłącz ten link", single:"Pojedynczo", batch:"Zbiorczo" },
-    cs: { disable:"Vypnout tento odkaz", single:"Jednotlivě", batch:"Hromadně" },
-  };
-  const pack = d[L] || d.en;
-  return pack[key] || d.en[key] || String(key);
-}
-
-function __fydStripIconsWorker(t) {
-  return String(t || "").replace(/^[^\p{L}\p{N}]+/gu, "").trim();
-}
-function __fydIsDisableWorker(t) {
-  t = t.toLowerCase();
-  return t.includes("wyłącz") || t.includes("wylacz") || t.includes("disable") || t.includes("vypnout");
-}
-function __fydIsSingleWorker(t) {
-  t = t.toLowerCase();
-  return t.includes("pojedyncz") || t.includes("single") || t.includes("jednotliv");
-}
-function __fydIsBatchWorker(t) {
-  t = t.toLowerCase();
-  return t.includes("zbiorcz") || t.includes("batch") || t.includes("hromad");
-}
-
-async function __fydNormalizeTgPayloadWorker(url, payload) {
-  try {
-    if (!payload || typeof payload !== "object") return payload;
-
-    const lang = await __fydLangForChatWorker(payload.chat_id);
-
-    // sendMessage: preview ON (żeby częściej był obrazek z link preview)
-    const ep = String(url || "").split("?")[0];
-    if (ep.includes("/sendMessage")) {
-      payload.disable_web_page_preview = false;
-      payload.link_preview_options = { is_disabled: false };
-    }
-
-    // inline buttons: bez ikon + w języku z DB
-    let rm = payload.reply_markup;
-    if (!rm) return payload;
-
-    let obj = rm;
-    let wasString = false;
-    if (typeof rm === "string") {
-      try { obj = JSON.parse(rm); wasString = true; } catch { return payload; }
-    }
-    if (!obj || !Array.isArray(obj.inline_keyboard)) return payload;
-
-    for (const row of obj.inline_keyboard) {
-      if (!Array.isArray(row)) continue;
-      for (const btn of row) {
-        if (!btn || typeof btn !== "object" || typeof btn.text !== "string") continue;
-        const base = __fydStripIconsWorker(btn.text);
-        if (__fydIsDisableWorker(base)) btn.text = __fydTWorker(lang, "disable");
-        else if (__fydIsSingleWorker(base)) btn.text = __fydTWorker(lang, "single");
-        else if (__fydIsBatchWorker(base)) btn.text = __fydTWorker(lang, "batch");
-      }
-    }
-
-    payload.reply_markup = wasString ? JSON.stringify(obj) : obj;
-    return payload;
-  } catch {
-    return payload;
-  }
-}
-
-const __FYD_TG_FETCH_ORIG_V2 = fetch;
-async function __fydTgFetch(url, opts) {
-  try {
-    const u = String(url || "");
-    if (!u.includes("api.telegram.org")) return __FYD_TG_FETCH_ORIG_V2(url, opts);
-
-    const method = (opts && opts.method) ? String(opts.method).toUpperCase() : "GET";
-    if (method !== "POST") return __FYD_TG_FETCH_ORIG_V2(url, opts);
-
-    const body = opts && opts.body;
-    if (typeof body !== "string") return __FYD_TG_FETCH_ORIG_V2(url, opts);
-
-    let payload;
-    try { payload = JSON.parse(body); } catch { return __FYD_TG_FETCH_ORIG_V2(url, opts); }
-
-    payload = await __fydNormalizeTgPayloadWorker(u, payload);
-
-    const nopts = Object.assign({}, (opts || {}));
-    nopts.body = JSON.stringify(payload);
-    return __FYD_TG_FETCH_ORIG_V2(url, nopts);
-  } catch {
-    return __FYD_TG_FETCH_ORIG_V2(url, opts);
-  }
-}
 const TG = process.env.TELEGRAM_BOT_TOKEN || "";
-
-
-/* __FYD_PW_PREAUTH_ONCE_V6__ */
-async function __fydGetPreauthProxyOnce() { return null; }
-
-/* __FYD_PW_PREAUTH_ONCE_V1__ */
-async function __fydGetPreauthProxy() { return null; }
-
 
 const API_BASE = process.env.API_BASE || "http://api:3000";
 
-// ---- PROXY config (worker) ----
-const __PROXY_ON = (() => { const v = String(process.env.PROXY_ENABLED || "").trim().toLowerCase(); return (v === "1" || v === "true" || v === "yes"); })();const PROXY_SERVER = process.env.PROXY_SERVER || "";
-const PROXY_USERNAME = process.env.PROXY_USERNAME || process.env.PROXY_USER || "";
-const PROXY_PASSWORD = process.env.PROXY_PASSWORD || process.env.PROXY_PASS || "";
-const __FYD_PROXY_DUP_V2 =
-  (( __PROXY_ON === "1" || __PROXY_ON === "true" || __PROXY_ON === "yes") && PROXY_SERVER)
-    ? { server: PROXY_SERVER, username: PROXY_USERNAME, password: PROXY_PASSWORD }
-    : null;
 
+const userLimitsCache = new Map(); // tgUserId -> limits
+async function getUserLimits(telegramUserId) {
+  const key = String(telegramUserId || "");
+  if (!key) return null;
+  if (userLimitsCache.has(key)) return userLimitsCache.get(key);
+
+  try {
+    const r = await fetch(API_BASE + "/me", {
+      headers: { "X-Telegram-User-Id": key },
+    });
+    if (!r.ok) return null;
+
+    const j = await r.json();
+    const f = j?.features || {};
+    const out = {
+      sources_allowed: Array.isArray(f.sources_allowed) ? f.sources_allowed : null,
+      history_keep_per_link: Number(f.history_keep_per_link || 0) || null,
+      max_items_per_link_per_loop: Number(f.max_items_per_link_per_loop || 0) || null,
+      links_limit: Number(f.links_limit || 0) || null,
+    };
+
+    userLimitsCache.set(key, out);
+    return out;
+  } catch (e) {
+    return null;
+  }
+}
 
 
 // debug logi
-const DEBUG = process.env.DEBUG_WORKER === "true" || process.env.DEBUG === "true";
+const DEBUG =
+  process.env.DEBUG_WORKER === "true" || process.env.DEBUG === "true";
 
 function logDebug(...args) {
   if (DEBUG) console.log(...args);
 }
 
-// ---- OLX CloudFront backoff helper ----
-async function __olxCloudfrontMaybeBackoff(page) {
-  const now = Date.now();
-  const until = globalThis.__olxBackoffUntil || 0;
-  if (now < until) throw new Error("OLX_BACKOFF_ACTIVE");
+// =================== PROXY (ENV) ===================
+// Wymaga w .env / compose:
+// PROXY_SERVER=http://geo.iproyal.com:12321
+// PROXY_USERNAME=...
+// PROXY_PASSWORD=...
+const PROXY_SERVER = process.env.PROXY_SERVER || "";
+const PROXY_USERNAME = process.env.PROXY_USERNAME || "";
+const PROXY_PASSWORD = process.env.PROXY_PASSWORD || "";
 
-  const title = String((await page.title().catch(() => "")) || "");
-  const t = title.toLowerCase();
-  if (t.includes("request could not be satisfied")) {
-    const hits = (globalThis.__olxCloudfrontHits = (globalThis.__olxCloudfrontHits || 0) + 1);
-    console.log("[olx] OLX_CLOUDFRONT_BLOCK_DETECTED hits=" + hits + " title=" + title);
-    const backoffMs = parseInt(process.env.OLX_BACKOFF_MS || "600000", 10);
-    if (hits >= 3) {
-      globalThis.__olxBackoffUntil = Date.now() + backoffMs;
-      globalThis.__olxCloudfrontHits = 0;
-      console.log("[olx] OLX_BACKOFF_SET ms=" + backoffMs);
-    }
-    throw new Error("OLX_CLOUDFRONT_BLOCK");
-  }
-}
-// ---- OLX CloudFront backoff helper END ----
+const PROXY =
+  PROXY_SERVER && PROXY_USERNAME && PROXY_PASSWORD
+    ? {
+        server: PROXY_SERVER,
+        username: PROXY_USERNAME,
+        password: PROXY_PASSWORD,
+      }
+    : null;
 
-function __urlStr(u) {
-  try {
-    if (typeof u === "string") return u;
-    if (u && typeof u === "object") {
-      if (typeof u.href === "string") return u.href;
-      if (typeof u.url === "string") return u.url;
-      if (typeof u.toString === "function") return u.toString();
-    }
-  } catch {}
-  return String(u || "");
+if (DEBUG) {
+  console.log(
+    `[proxy] enabled=${!!PROXY} server=${PROXY_SERVER || "-"} user=${
+      PROXY_USERNAME ? "YES" : "NO"
+    } pass=${PROXY_PASSWORD ? "YES" : "NO"}`
+  );
 }
 
+function cleanKey(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const low = s.toLowerCase();
+  if (low === "null" || low === "undefined") return null;
+  return s;
+}
 
-// __FYD_BLOCK_HOSTS_V1__
-const __FYD_BLOCK_HOST_RE = /(baxter\.olx\.org|cookielaw\.org|onetrust\.com|doubleclick\.net|googlesyndication\.com|googleadservices\.com|imasdk\.googleapis\.com|btloader\.com|maze\.co|ad-delivery\.net|dns-finder\.com|cdn\.jsdelivr\.net|www\.google\.com|eprivacy-storage\.eu-sharedservices\.olxcdn\.com)$/i;
-
-// ---- FYD: reduce proxy transfer (Playwright) + Vinted previews + link label in offers ----
-async function __fydBlockHeavyAssets(target) {
+function normalizeVintedItemUrl(rawUrl) {
   try {
-    await target.route("**/*", (route) => {
-      const req = route.request();
-      const t = req.resourceType();
-        try { const h = new URL(req.url()).hostname.toLowerCase(); if (__FYD_BLOCK_HOST_RE.test(h)) return route.abort(); } catch {}
+    const u = new URL(rawUrl);
 
-      // block big trackers/ads (proxy cost)
+    if (u.pathname.startsWith("/items/")) {
+      u.search = "";
+      u.hash = "";
+      return u.toString();
+    }
+
+    const ref = u.searchParams.get("ref_url");
+    if (ref) {
       try {
-        const h = new URL(req.url()).hostname.toLowerCase();
-        if (__FYD_BLOCK_HOST_RE.test(h)) return route.abort();
-      } catch {}
+        const decoded = decodeURIComponent(ref);
+        const u2 = new URL(decoded);
+        if (u2.pathname.startsWith("/items/")) {
+          u2.search = "";
+          u2.hash = "";
+          return u2.toString();
+        }
+      } catch {
+        // ignore
+      }
+    }
 
-      // block heavy assets (we only need HTML/JSON)
-      if (t === "image" || t === "media" || t === "font") return route.abort();
-
-      return route.continue();
-    });
-  } catch {}
-}
-
-function __fydDecorateItems(link, items) {
-  const label = String(link?.label || "").trim();
-      return items;
-  const prefix = label + " · ";
-  return (items || []).map((it) => {
-    const title = it?.title != null ? String(it.title) : "";
-    return { ...it, title: prefix + title };
-  });
-}
-
-// Telegram podgląd dla Vinted: dopnij jawny URL do /items/... na końcu wiadomości
-// (Telegram robi preview po og:image, ale najpewniej gdy ma "goły" URL w treści).
-function __fydEnsureVintedPreviewUrl(text) {
-  const s = String(text || "");
-  if (!s.includes("vinted.") || !s.includes("/items/")) return s;
-
-  const m1 = s.match(/https?:\/\/[^\s"']*vinted\.[^\s"']*\/items\/[^\s<>"']+/i);
-  const m2 = s.match(/href="(https?:\/\/[^"]*vinted\.[^"]*\/items\/[^"]+)"/i);
-  const url = (m1 && m1[0]) || (m2 && m2[1]) || "";
-  if (!url) return s;
-
-  const esc = url.replace(/[.*+?^$()|[\]\\]/g, "\\$&");
-  const lineRe = new RegExp("(^|\\n)" + esc + "(\\n|$)");
-  if (lineRe.test(s)) return s;
-
-  return s.replace(/\s+$/, "") + "\n" + url;
+    return rawUrl;
+  } catch {
+    return rawUrl;
+  }
 }
 
 // Konfiguracja workera
-const LOOP_DELAY_MS = Number(process.env.LOOP_DELAY_MS || 300000);
-const SLEEP_BETWEEN_ITEMS_MS = Number(process.env.SLEEP_BETWEEN_ITEMS_MS || 1200);
+const LOOP_DELAY_MS = Number(process.env.LOOP_DELAY_MS || 300000); // przerwa między kolejnymi loopOnce
+const SLEEP_BETWEEN_ITEMS_MS = Number(process.env.SLEEP_BETWEEN_ITEMS_MS || 1200); // przerwa między wysyłkami do Telegrama
 
-const MAX_ITEMS_PER_LINK_PER_LOOP = Number(process.env.MAX_ITEMS_PER_LINK_PER_LOOP || 10);
-const MIN_BATCH_ITEMS = 1;
+// Domyślne limity
+const MAX_ITEMS_PER_LINK_PER_LOOP = Number(process.env.MAX_ITEMS_PER_LINK_PER_LOOP || 10); // max ofert na 1 link w 1 pętli
+const MIN_BATCH_ITEMS = 1; // minimalna liczba ofert, żeby wysłać paczkę w trybie /zbiorcze
 
+// ile historii trzymać w DB na link (żeby nie puchło)
 const HISTORY_KEEP_PER_LINK = Number(process.env.HISTORY_KEEP_PER_LINK || 500);
 
+// Konfiguracja per źródło
 const SOURCE_CONFIG = {
-  olx: { maxPerLoop: MAX_ITEMS_PER_LINK_PER_LOOP, minBatchItems: MIN_BATCH_ITEMS },
-  vinted: { maxPerLoop: MAX_ITEMS_PER_LINK_PER_LOOP, minBatchItems: MIN_BATCH_ITEMS },
-  default: { maxPerLoop: MAX_ITEMS_PER_LINK_PER_LOOP, minBatchItems: MIN_BATCH_ITEMS },
+  olx: {
+    maxPerLoop: MAX_ITEMS_PER_LINK_PER_LOOP,
+    minBatchItems: MIN_BATCH_ITEMS,
+  },
+  vinted: {
+    maxPerLoop: MAX_ITEMS_PER_LINK_PER_LOOP,
+    minBatchItems: MIN_BATCH_ITEMS,
+  },
+  default: {
+    maxPerLoop: MAX_ITEMS_PER_LINK_PER_LOOP,
+    minBatchItems: MIN_BATCH_ITEMS,
+  },
 };
 
 function getSourceConfig(source) {
@@ -914,26 +165,31 @@ function getSourceConfig(source) {
 
 // Bufory dla trybu /zbiorcze – klucz: "userId:chatId:linkId"
 const batchBuffers = new Map();
+// ---------- Helpery ogólne ----------
 
 function normalizeOlxUrl(u = "") {
   try {
     let out = String(u ?? "").trim();
     if (!out) return "";
+
+    // czasem last_key bywa zapisany jako samo ID (np. ID18xxxx) – zostaw
     if (/^ID[0-9A-Za-z]+$/.test(out)) return out;
+
+    // jeśli to nie wygląda jak URL, nie kombinuj
     if (!/^https?:\/\//i.test(out)) return out;
 
     const url = new URL(out);
-    url.hash = "";
 
-    // zostawiamy query (filtry / order / dist)
+    // ujednolicenia
+    url.hash = "";
+    url.search = "";
+
+    // OLX bywa na m.olx.pl albo z /d/ – kanonizujemy do jednego formatu
     url.hostname = "www.olx.pl";
     url.pathname = url.pathname.replace(/^\/d\//, "/");
     url.pathname = url.pathname.replace(/\/+$/, "");
 
-    // wymuś trailing slash dla listingów .../q-.../
-    if (/\/q-[^/]+$/i.test(url.pathname)) url.pathname += "/";
-
-    return url.toString();
+    return url.toString().replace(/\/+$/, "");
   } catch {
     return String(u ?? "").trim();
   }
@@ -941,11 +197,23 @@ function normalizeOlxUrl(u = "") {
 
 
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getTodayStart() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
 
 function getItemKey(it) {
   return it?.itemKey || it?.item_key || it?.itemKeyNormalized || null;
 }
 
+/**
+ * Zwraca tylko elementy "przed" lastKey (czyli nowsze w kolejności newest-first)
+ * oraz informację czy lastKey został znaleziony na liście.
+ */
 function takeNewItemsUntilLastKey(items, lastKey) {
   if (!lastKey) return { fresh: [], found: false };
 
@@ -957,7 +225,7 @@ function takeNewItemsUntilLastKey(items, lastKey) {
     if (!k) continue;
     if (k === lastKey) {
       found = true;
-      break;
+      break; // STOP na last_key
     }
     out.push(it);
   }
@@ -991,23 +259,42 @@ function detectSource(url) {
   }
 }
 
+// Vinted: wyciągamy ID z /items/<id>-...
+function getVintedItemIdFromUrl(urlOrKey) {
+  try {
+    const u = new URL(urlOrKey);
+    const m = u.pathname.match(/^\/items\/(\d+)(?:-|\/|$)/i);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    const s = String(urlOrKey || "").trim();
+    if (/^\d+$/.test(s)) return Number(s);
+    return null;
+  }
+}
+
 function normalizeKey(url) {
   try {
     const u = new URL(url);
     const host = (u.hostname || "").toLowerCase();
 
+    // OLX
     if (host.includes("olx.")) {
       u.hostname = "www.olx.pl";
+
       const m = u.pathname.match(/\/(d\/)?oferta\/([^/?#]+)(\/.*)?$/);
       if (m) {
         const slug = m[2];
         u.pathname = `/oferta/${slug}`;
       }
+
       u.search = "";
       u.hash = "";
       return u.toString();
     }
 
+    // Vinted
     if (host.includes("vinted.")) {
       if (u.pathname === "/session-refresh") {
         const ref = u.searchParams.get("ref_url");
@@ -1015,6 +302,7 @@ function normalizeKey(url) {
           try {
             const decoded = decodeURIComponent(ref);
             const u2 = new URL(decoded, `${u.protocol}//${u.host}`);
+
             if (u2.pathname.startsWith("/items/")) {
               const m2 = u2.pathname.match(/^\/items\/(\d+)/i);
               if (m2) u2.pathname = `/items/${m2[1]}`;
@@ -1022,7 +310,9 @@ function normalizeKey(url) {
               u2.hash = "";
               return u2.toString();
             }
-          } catch {}
+          } catch {
+            // ignore
+          }
         }
       }
 
@@ -1043,7 +333,40 @@ function normalizeKey(url) {
   }
 }
 
-// Minimalne escape HTML dla Telegrama
+function deriveOlxTitleFromUrl(url) {
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.split("/").filter(Boolean);
+    if (!parts.length) return null;
+
+    let last = parts[parts.length - 1];
+    last = last.replace(/\.[a-z0-9]+$/i, "");
+
+    let slugParts = last.split("-");
+
+    slugParts = slugParts.filter((p) => {
+      const up = p.toUpperCase();
+      if (up.startsWith("CID")) return false;
+      if (up.startsWith("ID") && up.length > 2) return false;
+      return true;
+    });
+
+    if (!slugParts.length) return null;
+
+    const pretty = slugParts
+      .join(" ")
+      .split(" ")
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+
+    return pretty || null;
+  } catch {
+    return null;
+  }
+}
+
+// Minimalne escape HTML dla Telegrama (parse_mode=HTML)
 function escapeHtml(str = "") {
   return String(str)
     .replace(/&/g, "&amp;")
@@ -1051,7 +374,7 @@ function escapeHtml(str = "") {
     .replace(/>/g, "&gt;");
 }
 
-// Parsowanie ceny
+// Parsowanie "1 399 zł" / "1,399 PLN" itd.
 function parsePrice(text) {
   if (!text) return { price: null, currency: null };
 
@@ -1068,1410 +391,70 @@ function parsePrice(text) {
   else if (/USD|\$/.test(rawCurr)) currency = "USD";
   else if (rawCurr) currency = rawCurr;
 
-  return { price: Number.isFinite(price) ? price : null, currency };
-}
-
-// Telegram send (retry 429)
-
-// __FYD_SENDTELEGRAM_LABEL_I18N_V1__
-const __FYD_META_CACHE = new Map();
-
-function __fydEsc(x) {
-  return String(x || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-function __fydNormLang(x) {
-  const raw = String(x || "").trim().toLowerCase();
-  const base = raw.includes("-") ? raw.split("-")[0] : raw;
-  return base || "en";
-}
-
-const __FYD_I18N = {
-  en: { new_listings: "New listings", full_history: "Full history:", btn_disable: "Disable this link", btn_single: "Single", btn_batch: "Batch" },
-  pl: { new_listings: "Nowe ogłoszenia", full_history: "Pełną historię zobaczysz w", btn_disable: "Wyłącz ten link", btn_single: "Pojedynczo", btn_batch: "Zbiorczo" },
-  de: { new_listings: "Neue Angebote", full_history: "Voller Verlauf:", btn_disable: "Link deaktivieren", btn_single: "Einzeln", btn_batch: "Sammel" },
-  fr: { new_listings: "Nouvelles annonces", full_history: "Historique complet :", btn_disable: "Désactiver ce lien", btn_single: "Unitaire", btn_batch: "Groupé" },
-  es: { new_listings: "Nuevos anuncios", full_history: "Historial completo:", btn_disable: "Desactivar este enlace", btn_single: "Individual", btn_batch: "Por lotes" },
-  it: { new_listings: "Nuovi annunci", full_history: "Cronologia completa:", btn_disable: "Disattiva questo link", btn_single: "Singolo", btn_batch: "Raggruppato" },
-  pt: { new_listings: "Novos anúncios", full_history: "Histórico completo:", btn_disable: "Desativar este link", btn_single: "Individual", btn_batch: "Em lote" },
-  nl: { new_listings: "Nieuwe advertenties", full_history: "Volledige geschiedenis:", btn_disable: "Deze link uitzetten", btn_single: "Los", btn_batch: "Batch" },
-  ro: { new_listings: "Anunțuri noi", full_history: "Istoric complet:", btn_disable: "Dezactivează acest link", btn_single: "Individual", btn_batch: "În lot" },
-  cs: { new_listings: "Nové inzeráty", full_history: "Celá historie:", btn_disable: "Vypnout tento odkaz", btn_single: "Jednotlivě", btn_batch: "Hromadně" },
-  hu: { new_listings: "Új hirdetések", full_history: "Teljes előzmény:", btn_disable: "Link kikapcsolása", btn_single: "Egyenként", btn_batch: "Csoportosan" },
-};
-
-function __fydT(lang, key) {
-  const l = __fydNormLang(lang);
-  return (__FYD_I18N[l] && __FYD_I18N[l][key]) || (__FYD_I18N.en && __FYD_I18N.en[key]) || key;
-}
-
-async function __fydGetMetaByLinkId(linkId) {
-  const now = Date.now();
-  const cached = __FYD_META_CACHE.get(linkId);
-  if (cached && now - cached.ts < 30 * 1000) return cached;
-
-  try {
-    const db = (typeof notifyPool !== "undefined" && notifyPool) ? notifyPool : null;
-
-    if (!db || typeof db.query !== "function") {
-      const meta = { id: linkId, label: "", lang: "en", ts: now };
-      __FYD_META_CACHE.set(linkId, meta);
-      return meta;
-    }
-
-    const r = await db.query(
-      "SELECT COALESCE(l.label,'') AS label, COALESCE(u.lang,'en') AS lang FROM links l JOIN users u ON u.id=l.user_id WHERE l.id=$1",
-      [linkId]
-    );
-    const row = (r.rows && r.rows[0]) || {};
-    const meta = { id: linkId, label: String(row.label || "").trim(), lang: String(row.lang || "en"), ts: now };
-    __FYD_META_CACHE.set(linkId, meta);
-    return meta;
-  } catch {
-    const meta = { id: linkId, label: "", lang: "en", ts: now };
-    __FYD_META_CACHE.set(linkId, meta);
-    return meta;
-  }
-}
-
-function __fydRewriteTextAndButtons(text, meta, payload) {
-  const lang = __fydNormLang(meta.lang);
-  let out = String(text || "");
-
-  // 🆕 ...
-  out = out.replace(
-    /^(?:🆕\s*)?(?:New listings|Nowe ogłoszenia|Neue Angebote|Nouvelles annonces|Nuevos anuncios|Nuovi annunci|Novos anúncios|Nieuwe advertenties|Anunțuri noi|Nové inzeráty|Új hirdetések)\s*$/m,
-    "🆕 " + __fydT(lang, "new_listings")
-  );
-
-  // 🔍 ... · ID N -> jeśli label istnieje, to podmień tytuł na label
-  if (meta.label) {
-    const re = new RegExp("^(\\s*(?:🔍|🔎)\\s*)(.*?)\\s*·\\s*ID\\s*" + meta.id + "\\b", "m");
-    out = out.replace(re, function (_, pref) {
-      return pref + __fydEsc(meta.label) + " · ID " + meta.id;
-    });
-
-    // fallback: obsłuż też "ID <b>119</b>"
-    const re2 = new RegExp("^(\\s*(?:🔍|🔎)\\s*).*?\\s*·\\s*\\bID\\b\\s*(?:<[^>]*>\\s*)?" + meta.id + "(?:\\s*<\\/[^>]+>)?\\s*$", "m");
-    out = out.replace(re2, function (_, pref) {
-      return pref + __fydEsc(meta.label) + " · ID " + meta.id;
-    });
-  }
-
-  // linia z /najnowsze N (jeśli występuje)
-  const reHist = new RegExp("^.*\\/najnowsze\\s+" + meta.id + "\\s*$", "m");
-  out = out.replace(reHist, __fydT(lang, "full_history") + " /najnowsze " + meta.id);
-
-  // fallback: podmień też różne prefiksy
-  const reHist2 = new RegExp("^[^\\n]*\\/najnowsze\\s+" + meta.id + "[^\\n]*$", "m");
-  out = out.replace(reHist2, __fydT(lang, "full_history") + " /najnowsze " + meta.id);
-
-  // przyciski inline_keyboard
-  try {
-    const rm = payload && payload.reply_markup;
-    if (rm && Array.isArray(rm.inline_keyboard)) {
-      for (const row of rm.inline_keyboard) {
-        if (!Array.isArray(row)) continue;
-        for (const btn of row) {
-          if (!btn || typeof btn.text !== "string") continue;
-          const t = btn.text.trim();
-          if (t === "Wyłącz ten link" || t === "Disable this link" || t === "🔕 Wyłącz ten link") btn.text = __fydT(lang, "btn_disable");
-          if (t === "Pojedynczo" || t === "Single" || t === "📨 Pojedynczo") btn.text = __fydT(lang, "btn_single");
-          if (t === "Zbiorczo" || t === "Batch" || t === "📦 Zbiorczo") btn.text = __fydT(lang, "btn_batch");
-        }
-      }
-    }
-  } catch {}
-
-  return out;
-}
-
-async function sendTelegram(method, payload) {
-  /* __FYD_TG_LIMITS_V1__ */
-  // Telegram hard limits: sendMessage text 4096 chars, captions ~1024.
-  // Truncujemy, żeby nie było 400: "message is too long".
-  try {
-    if (method === "sendMessage" && payload && typeof payload.text === "string" && payload.text.length > 3900) {
-      payload = { ...payload, text: payload.text.slice(0, 3900) + "\n…(obcięte: limit Telegram 4096)" };
-    }
-    if ((method === "sendPhoto" || method === "sendDocument" || method === "sendVideo" || method === "sendAnimation") &&
-        payload && typeof payload.caption === "string" && payload.caption.length > 900) {
-      payload = { ...payload, caption: payload.caption.slice(0, 900) + "…" };
-    }
-  } catch {}
-  /* __FYD_TG_LIMITS_V1__ END */
-
-  // TG: limit długości + unikaj albumów (ucięte miniatury)
-  try {
-    if (typeof method === "string" && payload && typeof payload === "object") {
-      const __trim = (str, lim) => {
-        const t = String(str || "");
-        if (t.length <= lim) return t;
-        return t.slice(0, lim - 20) + "\n…(ucięto)";
-      };
-
-      if (typeof payload.text === "string") payload.text = __trim(payload.text, 3900);
-      if (typeof payload.caption === "string") payload.caption = __trim(payload.caption, 900);
-
-      // Albumy -> 1 zdjęcie (sendPhoto), żeby nie było „ucięć” podglądu
-      if (method === "sendMediaGroup" && Array.isArray(payload.media) && payload.media.length) {
-        const first = payload.media[0] || {};
-        const photo = first.media || first.file_id || first.url;
-        const caption = first.caption || payload.caption || "";
-        method = "sendPhoto";
-        payload = {
-          chat_id: payload.chat_id,
-          photo,
-          caption: __trim(caption, 900),
-          parse_mode: first.parse_mode || payload.parse_mode,
-        };
-      }
-    }
-  } catch {}
-
-  try {
-    if (method === "sendMessage" && payload && typeof payload.text === "string") {
-      payload.text = __fydFixOutgoingText(payload.text, payload);
-    }
-    if (method === "sendPhoto" && payload && typeof payload.caption === "string") {
-      payload.caption = __fydFixOutgoingText(payload.caption, payload);
-    }
-  } catch {}
-
-  // label + i18n nagłówków
-  try {
-    if (method === "sendMessage" && payload && typeof payload.text === "string") {
-      const mId = String(payload.text).match(/\bID\b\s*(?:<[^>]*>\s*)?(\d{1,9})/);
-      if (mId) {
-        const linkId = Number(mId[1]);
-        if (Number.isFinite(linkId) && linkId > 0) {
-          const meta = await __fydGetMetaByLinkId(linkId);
-          payload.text = __fydRewriteTextAndButtons(payload.text, meta, payload);
-        }
-      }
-    }
-  } catch {}
-
-  if (!TG) {
-    console.error("sendTelegram: brak TELEGRAM_BOT_TOKEN – nie wysyłam");
-    return false;
-  }
-
-  const url = `https://api.telegram.org/bot${TG}/${method}`;
-
-  while (true) {
-    try {
-      const res = await __fydTgFetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const text = await res.text().catch(() => "");
-
-      if (res.status === 429) {
-        let retry = 30;
-        try {
-          const data429 = JSON.parse(text);
-          if (data429?.parameters?.retry_after) retry = Number(data429.parameters.retry_after) || retry;
-        } catch {}
-        console.warn(`sendTelegram: 429 retry_after=${retry}s`);
-        
-        const untilMs = Date.now() + (retry * 1000);
-
-        // FYD: 429 soft stop (persist pause) — pause link by ID from message text (ID <num>)
-        try {
-          let linkId = 0;
-          const txt = (payload && typeof payload.text === "string") ? payload.text : "";
-          const mId2 = String(txt).match(/\bID\b\s*(?:<[^>]*>\s*)?(\d{1,9})/);
-          if (mId2) linkId = Number(mId2[1]) || 0;
-
-          if (Number.isFinite(linkId) && linkId > 0) {
-            await notifyPool.query(
-              `UPDATE links
-               SET notify_from = to_timestamp($1 / 1000.0),
-                   updated_at = NOW()
-               WHERE id = $2`,
-              [untilMs, linkId]
-            );
-            console.log(`[notify_debug_pause] 429 link_id=${linkId} until=${new Date(untilMs).toISOString()}`);
-          } else {
-            console.log(`[notify_debug_pause] 429 no_link_id chat=${payload && payload.chat_id ? payload.chat_id : ""} until=${new Date(untilMs).toISOString()}`);
-          }
-        } catch (e) {
-          console.log("[notify_debug_pause_err] 429 persist failed:", e?.message || e);
-        }
-        await sleep(retry * 1000);
-        continue;
-      }
-
-      let data = null;
-      try { data = JSON.parse(text); } catch { data = null; }
-      const ok = !!(res.ok && data && data.ok === true);
-
-      console.log(`[tg_result] method=${method} status=${res.status} ok=${ok}`);
-
-      if (!ok) {
-        console.error("sendTelegram: HTTP error", res.status, res.statusText, text);
-      }
-
-      return ok;
-    } catch (err) {
-      console.error("sendTelegram: exception", err);
-      await sleep(2000);
-      return false;
-    }
-  }
-}
-
-
-
-function formatLinkHeader(link) {
-  const src = (link.source || detectSource(link.url) || "").toUpperCase();
-  let label = link.label || link.name || "";
-  if (!label) {
-    if (src === "OLX") label = "OLX wyszukiwanie";
-    else if (src === "VINTED") label = "Vinted wyszukiwanie";
-    else label = link.url || "Monitoring";
-  }
-  const idPart = link.id ? ` · <i>ID ${link.id}</i>` : "";
-  return `🔍 <b>${escapeHtml(label)}</b>${idPart}`;
-}
-
-function hiddenLink(url) {
-  return `<a href="${escapeHtml(url)}">\u200B</a>`;
-}
-
-// __FYD_CLEAN_TITLE_V1__
-// OLX/Vinted potrafią mieć w "title" kilka linii (np. cena, 'do negocjacji').
-// Żeby nie było śmieci w wiadomościach: bierzemy tylko pierwszą sensowną linię i czyścimy whitespace.
-function __fydCleanTitle(raw) {
-  const s = String(raw || "").replace(/\r/g, "").trim();
-  if (!s) return "";
-  const first = s.split("\n").map(x => String(x || "").trim()).filter(Boolean)[0] || "";
-  return first.replace(/\s+/g, " ").trim();
-}
-// __FYD_CLEAN_TITLE_V1__ END
-
-// __FYD_BTN_I18N_WORKER_V1__
-function __fydLangBaseBtn(x) {
-  const raw = String(x || "").trim().toLowerCase();
-  return raw.includes("-") ? raw.split("-")[0] : (raw || "en");
-}
-function __fydBtnText(lang, key) {
-  const L = __fydLangBaseBtn(lang) || "en";
-  const dict = {
-    en: { disable:"Disable this link", single:"Single", batch:"Batch" },
-    pl: { disable:"Wyłącz ten link", single:"Pojedynczo", batch:"Zbiorczo" },
-    de: { disable:"Diesen Link deaktivieren", single:"Einzeln", batch:"Gebündelt" },
-    fr: { disable:"Désactiver ce lien", single:"Individuel", batch:"Groupé" },
-    es: { disable:"Desactivar este enlace", single:"Individual", batch:"Agrupado" },
-    it: { disable:"Disattiva questo link", single:"Singolo", batch:"Raggruppato" },
-    pt: { disable:"Desativar este link", single:"Individual", batch:"Agrupado" },
-    ro: { disable:"Dezactivează acest link", single:"Individual", batch:"Grupat" },
-    nl: { disable:"Deze link uitschakelen", single:"Enkel", batch:"Gebundeld" },
-    cs: { disable:"Vypnout tento odkaz", single:"Jednotlivě", batch:"Hromadně" },
-    sk: { disable:"Vypnúť tento odkaz", single:"Jednotlivo", batch:"Hromadne" },
-    hu: { disable:"Link kikapcsolása", single:"Egyenként", batch:"Csoportosan" },
-    hr: { disable:"Isključi ovu poveznicu", single:"Pojedinačno", batch:"Skupno" },
-    sr: { disable:"Isključi ovu vezu", single:"Pojedinačno", batch:"Zbirno" },
-    bs: { disable:"Isključi ovaj link", single:"Pojedinačno", batch:"Zbirno" },
-    uk: { disable:"Вимкнути це посилання", single:"Окремо", batch:"Пакетом" },
-    ru: { disable:"Отключить эту ссылку", single:"По одной", batch:"Пакетом" },
+  return {
+    price: Number.isFinite(price) ? price : null,
+    currency,
   };
-  const d = dict[L] || dict.en;
-  return d[key] || dict.en[key] || String(key);
 }
 
-
-async function tgSendItem(chatId, link, item, userLang) {
-  const src = (link.source || detectSource(link.url) || "").toLowerCase();
-  const lang = __fydLangBaseBtn(userLang || "en");
-
-  // twarde ujednolicenie Vinted itemów przed formatowaniem single
-  if (src === "vinted") item = __fydEnsureVintedItemFields(item);
-
-  /* __FYD_PHOTO_FALLBACK_V1__ */
-  try {
-    if (item && !item.photo) {
-      item.photo = item.photo_url || item.photoUrl || item.image || item.image_url || item.thumbnail || item.thumb || null;
-    }
-  } catch {}
-
-  const header = formatLinkHeader(link);
-
-  const __rawTitle =
-    String(item?.title || item?.name || item?.itemTitle || "").trim() ||
-    (src === "vinted" ? (__fydDeriveVintedTitleFromUrl(item?.url) || "") : "");
-
-  const title = __fydCleanTitle(__rawTitle);
-
-  let caption = `${header}\n\n<b>${escapeHtml(title || "")}</b>\n`;
-
-  if (item.price != null) {
-    const priceStr = `${item.price} ${item.currency || ""}`.trim();
-    caption += `\n💰 ${escapeHtml(priceStr)}`;
-  }
-  if (item.brand) caption += `\n🏷️ ${escapeHtml(item.brand)}`;
-  if (item.size) caption += `\n📏 ${escapeHtml(item.size)}`;
-  if (item.condition) caption += `\n✨ ${escapeHtml(item.condition)}`;
-
-  // wymagane: pełny URL zawsze w treści + preview (hidden link)
-  const url = String(item.url || "").trim();
-  caption += `\n\n${hiddenLink(url)}${escapeHtml(url)}`;
-
-  const keyboard = [
-    [{ text: "URL", url }],
-    [{ text: __fydBtnText(lang, "disable"), callback_data: `lnmode:${link.id}:off` }],
-    [
-      { text: __fydBtnText(lang, "single"), callback_data: `lnmode:${link.id}:single` },
-      { text: __fydBtnText(lang, "batch"), callback_data: `lnmode:${link.id}:batch` },
-    ],
-  ];
-
-  const replyMarkup = { inline_keyboard: keyboard };
-
-  const photo = (item && (item.photoUrl || item.photo)) || null;
-  const canSendPhoto =
-    src === "vinted" &&
-    typeof photo === "string" &&
-    /^https?:\/\//i.test(photo);
-
-  let ok = false;
-
-  if (canSendPhoto) {
-    ok = await sendTelegram("sendPhoto", {
-      chat_id: chatId,
-      photo,
-      caption,
-      parse_mode: "HTML",
-      reply_markup: replyMarkup,
-    });
-  } else {
-    ok = await sendTelegram("sendMessage", {
-      chat_id: chatId,
-      text: caption,
-      parse_mode: "HTML",
-      disable_web_page_preview: false,
-      reply_markup: replyMarkup,
-    });
-  }
-
-  await sleep(SLEEP_BETWEEN_ITEMS_MS);
-  return !!ok;
-}
-
-
-function __itemOrderKey(item) {
-  if (!item) return 0;
-
-  const v =
-    item.publishedMs ?? item.published_ms ??
-    item.publishedAt ?? item.published_at ??
-    item.createdAtTs ?? item.created_at_ts ??
-    item.createdAt ?? item.created_at ??
-    item.updatedAtTs ?? item.updated_at_ts ??
-    item.firstSeenAt ?? item.first_seen_at ??
-    item.seenAt ?? item.seen_at ??
-    item.ts ?? item.timestamp ?? item.time;
-
-  if (v != null) {
-    if (typeof v === "number") return v < 1000000000000 ? v * 1000 : v;
-    const ms = Date.parse(String(v));
-    if (Number.isFinite(ms)) return ms;
-  }
-
-  const idv = item.id ?? item.itemId ?? item.offerId ?? item.olxId ?? item.vintedId;
-  if (typeof idv === "number") return idv;
-
-  const sk = item.sortKey ?? item.sort_key;
-  if (typeof sk === "number") return sk;
-
-  return 0;
-}
-
-function sortItemsNewestFirst(items) {
-      return items;
-
-  const rows = items.map((it, idx) => {
-    const raw =
-      it?.listed_at || it?.listedAt ||
-      it?.created_at || it?.createdAt ||
-      it?.published_at || it?.publishedAt ||
-      it?.first_seen_at || it?.firstSeenAt ||
-      it?.first_seen || it?.firstSeen ||
-      null;
-
-    let ts = 0;
-    if (typeof raw === "number") ts = raw > 10_000_000_000 ? raw : raw * 1000; // s->ms
-    else if (typeof raw === "string" && raw.trim()) {
-      const t = Date.parse(raw);
-      ts = Number.isFinite(t) ? t : 0;
-    }
-    return { it, idx, ts };
-  });
-
-  const hasAnyTs = rows.some((r) => r.ts > 0);
-      return items; // respektuj kolejność z URL/scrapera
-
-  rows.sort((a, b) => (b.ts - a.ts) || (a.idx - b.idx));
-  return rows.map((r) => r.it);
-}
-
-
-function buildBatchMessage(link, items, skippedExtra = 0) {
-  items = sortItemsNewestFirst(items);
-  const header = formatLinkHeader(link);
-
-  // Telegram sendMessage hard limit = 4096 chars.
-  // Używamy bezpiecznego limitu, żeby NIGDY nie uciąć URL-a.
-  const MAX = 3900;
-
-  const safeFooter = (extraCount) => {
-    let t = "";
-    if (extraCount > 0) t += `+ ${extraCount} dodatkowych ofert.\n\n`;
-    t += `Pełną historię zobaczysz w /najnowsze ${link.id}`;
-    return t;
-  };
-
-  let text = `🆕 Nowe ogłoszenia\n${header}\n\n`;
-
-  const arr = Array.isArray(items) ? items : [];
-  let kept = 0;
-
-  for (let i = 0; i < arr.length; i++) {
-    const item = arr[i] || {};
-    const title = escapeHtml(__fydCleanTitle(String(item.title || item.name || item.itemTitle || "")));
-    const priceStr = item.price != null ? `${item.price} ${item.currency || ""}`.trim() : "";
-
-    // URL zawsze jako osobna linia i NIGDY nie ucinamy go w połowie
-    const urlLine = String(item.url || "").trim();
-    const block =
-      `${i + 1}. ${title}\n` +
-      (priceStr ? `💰 ${escapeHtml(priceStr)}\n` : "") +
-      `${escapeHtml(urlLine)}\n\n`;
-
-    const remaining = (arr.length - (i + 1)) + (Number(skippedExtra) || 0);
-    const candidate = (text + block + safeFooter(remaining)).trim();
-
-    if (candidate.length > MAX) break;
-
-    text += block;
-    kept += 1;
-  }
-
-  const extraCount = (arr.length - kept) + (Number(skippedExtra) || 0);
-  text = (text + safeFooter(extraCount)).trim();
-
-  // Ostateczny bezpiecznik: jeśli nawet header+footer są długie (bardzo rzadkie)
-  if (text.length > MAX) {
-    // usuń wszystko poza nagłówkiem i footerem
-    const base = `🆕 Nowe ogłoszenia\n${header}\n\n`;
-    const footer = safeFooter((arr.length) + (Number(skippedExtra) || 0));
-    text = (base + footer).trim();
-  }
-
-  return text;
-}
-
-function makeBatchKey(chatId, userId, linkId) {
-  return `${userId}:${chatId}:${linkId}`;
-}
-
-// ---- FYD_DAILYCOUNT_BUMP_V1 ----
-// Zlicza dzienne powiadomienia w public.chat_notifications (dla /status)
-async function __fydBumpChatDailyCount(db, chatId, userId, userTz, inc = 1) {
-  const cid = String(chatId || "").trim();
-  const uid = Number(userId);
-  const step = Number(inc) || 1;
-  if (!cid || !Number.isFinite(uid) || uid <= 0 || step <= 0) return;
-
-  try {
-    console.log(
-      "[daily_bump_debug] chat=" + cid +
-      " user=" + uid +
-      " inc=" + step +
-      " date=" + new Date().toISOString()
-    );
-    await db.query(
-
-      `
-      UPDATE chat_notifications
-      SET daily_count = CASE
-            WHEN daily_count_date IS NULL
-              OR daily_count_date::date <> (NOW() AT TIME ZONE $4)::date
-              THEN $1
-            ELSE COALESCE(daily_count, 0) + $1
-          END,
-          daily_count_date = (NOW() AT TIME ZONE $4)::date,
-          notify_from = CASE
-            WHEN daily_count_date IS NULL
-              OR daily_count_date::date <> (NOW() AT TIME ZONE $4)::date
-              THEN NOW()
-            ELSE notify_from
-          END,
-          updated_at = NOW()
-      WHERE chat_id = $2 AND user_id = $3
-      `
-,
-      [step, cid, uid, String(userTz || 'Europe/Warsaw')]
-    );
-  } catch (e) {
-    console.error("WARN: __fydBumpChatDailyCount failed:", e?.message || e);
-  }
-}
-
-// ---- FYD_DAILYCOUNT_BUMP_V1 END ----
-
-
-
-async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
-  console.log(`[notify_debug_start] link_id=${link.id} items_in=${(items || []).length}`);
-  if (!items || !items.length) return;
-
-  items = sortItemsNewestFirst(items);
-  const minBatchItems = opts.minBatchItems || MIN_BATCH_ITEMS;
-
-    const __warsawDay = (d) =>
-    new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Europe/Warsaw",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(d instanceof Date ? d : new Date());
-
-  const __warsawHour = () =>
-    Number(
-      new Intl.DateTimeFormat("en-GB", {
-        timeZone: "Europe/Warsaw",
-        hour: "2-digit",
-        hour12: false,
-      }).format(new Date())
-    );
-
-  const __todayForTz = (tz) => {
-    try {
-      return new Intl.DateTimeFormat("en-CA", {
-        timeZone: tz || "Europe/Warsaw",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      }).format(new Date());
-    } catch {
-      return __warsawDay();
-    }
-  };
-  const __hourForTz = (tz) => {
-    try {
-      const hh = new Intl.DateTimeFormat("en-GB", {
-        timeZone: tz || "Europe/Warsaw",
-        hour: "2-digit",
-        hour12: false,
-      }).format(new Date());
-      const n = Number(hh);
-      return Number.isFinite(n) ? n : __warsawHour();
-    } catch {
-      return __warsawHour();
-    }
-  };
-
-
-  const todayStr = __warsawDay();
-  const nowHour = __warsawHour();
-
-  try {
-    const res = await notifyPool.query(
-      `
-      SELECT
-        cn.chat_id,
-        cn.user_id,
-        cn.notify_from AS chat_notify_from,
-        l.notify_from AS link_notify_from,
-        cn.enabled,
-        cn.mode AS chat_mode,
-        COALESCE(NULLIF(cn.language,''), NULLIF(u.lang,''), NULLIF(u.language,''), 'en') AS lang,
-        COALESCE(NULLIF(u.timezone,''), 'Europe/Warsaw') AS tz,
-        cn.daily_count,
-        cn.daily_count_date,
-        (cn.daily_count_date AT TIME ZONE COALESCE(NULLIF(u.timezone,''),'Europe/Warsaw'))::date AS daily_count_date_tz,
-        LOWER(COALESCE(lnm.mode, cn.mode)) AS effective_mode,
-        lnm.mode AS link_mode,
-        qh.quiet_enabled,
-        qh.quiet_from,
-        qh.quiet_to
-      FROM links l
-      JOIN chat_notifications cn
-        ON cn.user_id = l.user_id
-       AND (l.chat_id IS NULL OR cn.chat_id = l.chat_id)
-      JOIN users u
-        ON u.id = cn.user_id
-      LEFT JOIN LATERAL (
-        SELECT mode
-        FROM link_notification_modes
-        WHERE user_id = cn.user_id
-          AND chat_id = cn.chat_id
-          AND link_id = l.id
-        ORDER BY updated_at DESC NULLS LAST
-        LIMIT 1
-      ) lnm ON TRUE
-      LEFT JOIN chat_quiet_hours qh
-        ON qh.chat_id = cn.chat_id
-      WHERE l.id = $1
-      `,
-      [link.id]
-    );
-
-    if (!res.rowCount) {
-      logDebug(`notifyChatsForLink: link ${link.id} – brak chat_notifications`);
-      return;
-    }
-
-    let chatRows = res.rows.map((row) => ({
-      ...row,
-      mode: (row.effective_mode || "single").toLowerCase(),
-    }));
-
-    // 1) wyłączone + OFF
-    chatRows = chatRows.filter((row) => row.enabled && row.mode !== "off");
-    if (!chatRows.length) return;
-    if (!items || !items.length) return;
-
-    for (const row of chatRows) {
-      const chatId = row.chat_id;
-      const userId = row.user_id;
-      const userTz = String(row.tz || "Europe/Warsaw");
-      const rowHour = (typeof __hourForTz === "function" ? __hourForTz(userTz) : nowHour);
-      const todayUserStr = (typeof __todayForTz === "function" ? __todayForTz(userTz) : todayStr);
-      // per-user day filter (do not mutate global items)
-      let itemsForRow = Array.isArray(items) ? items : [];
-      let skippedExtraForRow = Number(skippedExtra || 0);
-      try {
-        const beforeN = itemsForRow.length;
-        itemsForRow = itemsForRow.filter((it) => {
-          const raw =
-            it?.first_seen_at || it?.firstSeenAt ||
-            it?.listed_at || it?.listedAt ||
-            it?.created_at || it?.createdAt ||
-            it?.published_at || it?.publishedAt ||
-            null;
-          if (!raw) return true;
-          let ts = 0;
-          if (typeof raw === "number") {
-            ts = raw > 10_000_000_000 ? raw : raw * 1000;
-          } else if (typeof raw === "string" && raw.trim()) {
-            const t = Date.parse(raw);
-            ts = Number.isFinite(t) ? t : 0;
-          }
-          if (!ts) return true;
-          let itemDayStr = null;
-          try {
-            itemDayStr = new Intl.DateTimeFormat("en-CA", {
-              timeZone: userTz || "Europe/Warsaw",
-              year: "numeric",
-              month: "2-digit",
-              day: "2-digit",
-            }).format(new Date(ts));
-          } catch {
-            itemDayStr = null;
-          }
-          if (itemDayStr && itemDayStr < todayUserStr) return false;
-          return true;
-        });
-        const removed = beforeN - itemsForRow.length;
-        if (removed > 0) skippedExtraForRow += removed;
-      } catch {}
-
-      const rowLang = __fydLangBaseBtn(row.lang || "en");
-
-      // 2) cisza nocna
-      const quietEnabled = !!row.quiet_enabled;
-      const quietFrom = typeof row.quiet_from === "number" ? row.quiet_from : 22;
-      const quietTo = typeof row.quiet_to === "number" ? row.quiet_to : 7;
-
-      if (quietEnabled && isHourInQuietRange(rowHour, quietFrom, quietTo)) {
-        logDebug(`notify_debug_quiet chat=${chatId} user=${userId} tz=${userTz} from=${quietFrom} to=${quietTo} now=${rowHour}`);
-        continue;
-      }
-
-      // 3) dzienny limit – na podstawie chat_notifications (realnie wysłane oferty z tego czatu)
-      // HARD RESET licznika + marker (notify_from) przy zmianie dnia w TZ usera
-      // 3) dzienny limit – na podstawie chat_notifications (realnie wysłane oferty z tego czatu)
-      const maxDaily = await getDailyLimitForUserId(notifyPool, userId);
-
-      let dailyCount = 0;
-      let dailyDateStr = row.daily_count_date ? String(row.daily_count_date).slice(0, 10) : null;
-
-      const dc = Number(row.daily_count || 0);
-      if (dailyDateStr === todayUserStr && Number.isFinite(dc) && dc >= 0) {
-        dailyCount = dc;
-      }
-
-
-
-      if (dailyDateStr !== todayUserStr) {
-
-
-        dailyCount = 0;
-
-
-        dailyDateStr = todayUserStr;
-
-
-        try {
-
-
-          await notifyPool.query(
-
-
-            `
-
-
-            UPDATE chat_notifications
-
-
-            SET daily_count = 0,
-
-
-                daily_count_date = $3::date,
-
-
-                notify_from = NOW(),
-
-
-                updated_at = NOW()
-
-
-            WHERE chat_id = $1 AND user_id = $2
-
-
-            `,
-
-
-            [chatId, userId, todayUserStr]
-
-
-          );
-
-
-          row.chat_notify_from = new Date().toISOString();
-
-
-        } catch {}
-
-
-      }
-
-
-
-      // START MARKER: /dodaj + /on + północ (chat.notify_from) + aktywacja linku (link.notify_from)
-
-
-      const startAtMs = Math.max(
-
-
-        Date.parse(row.chat_notify_from || "") || 0,
-
-
-        Date.parse(row.link_notify_from || "") || 0
-
-
-      );
-
-
-
-      // filtruj elementy starsze niż start marker (nie wysyłamy backlogu)
-
-
-      if (startAtMs > 0 && Array.isArray(itemsForRow) && itemsForRow.length) {
-
-
-        const __before = itemsForRow.length;
-
-
-        itemsForRow = itemsForRow.filter((it) => {
-
-
-          const raw =
-
-
-            it?.first_seen_at || it?.firstSeenAt ||
-
-
-            it?.listed_at || it?.listedAt ||
-
-
-            it?.created_at || it?.createdAt ||
-
-
-            it?.published_at || it?.publishedAt ||
-
-
-            null;
-
-
-          if (!raw) return true;
-
-
-          let ts = 0;
-
-
-          if (typeof raw === "number") {
-
-
-            ts = raw > 10_000_000_000 ? raw : raw * 1000;
-
-
-          } else if (typeof raw === "string" && raw.trim()) {
-
-
-            const t = Date.parse(raw);
-
-
-            ts = Number.isFinite(t) ? t : 0;
-
-
-          }
-
-
-          if (!ts) return true;
-
-
-          return ts >= startAtMs;
-
-
-        });
-
-
-      }
-
-
-
-      logDebug(`notify_debug_daily chat=${chatId} user=${userId} tz=${userTz} count=${dailyCount} date=${dailyDateStr} max=${maxDaily}`);
-
-      if (dailyCount >= maxDaily) {
-        logDebug(`notify_debug_limit chat=${chatId} user=${userId} count=${dailyCount} max=${maxDaily}`);
-        console.log(
-          `[notify_debug_limit] link_id=${link.id} chat_id=${chatId} user_id=${userId} dailyCount=${dailyCount} maxDaily=${maxDaily} today=${todayUserStr}`
-        );
-        continue;
-      }
-
-      const mode = row.mode === "batch" ? "batch" : "single";
-      let sentSomething = false;
-      let sentCount = 0;
-
-      if (mode === "single") {
-        const remaining = Math.max(0, maxDaily - dailyCount);
-        if (remaining <= 0) continue;
-
-        const slice = itemsForRow.slice(0, remaining);
-        for (const item of slice) {
-          const __ok = await tgSendItem(chatId, link, item, rowLang);
-          if (__ok) await __fydBumpChatDailyCount(notifyPool, chatId, userId, userTz, 1);
-          sentSomething = true;
-          sentCount += 1;
-        }
-      } else {
-        const key = makeBatchKey(chatId, userId, link.id);
-        const existing = batchBuffers.get(key) || { items: [], skippedExtra: 0, dayStr: todayUserStr, startAtMs };
-        if (existing.dayStr !== todayUserStr || existing.startAtMs !== startAtMs) {
-          existing.items = [];
-          existing.skippedExtra = 0;
-          existing.dayStr = todayUserStr;
-          existing.startAtMs = startAtMs;
-        }
-existing.items.push(...itemsForRow);
-        if (typeof skippedExtraForRow === "number" && skippedExtraForRow > 0) {
-          existing.skippedExtra += skippedExtraForRow;
-        }
-
-        if (existing.items.length < minBatchItems && existing.skippedExtra === 0) {
-          // za mało ogłoszeń do sensownego batcha – buforujemy dalej
-          batchBuffers.set(key, existing);
-        } else {
-          const totalOffers = existing.items.length + (existing.skippedExtra || 0);
-          const remaining = Math.max(0, maxDaily - dailyCount);
-
-          if (remaining <= 0 || totalOffers <= 0) {
-            // limit wybity albo zero ofert – czyścimy bufor i nic nie wysyłamy
-            batchBuffers.delete(key);
-          } else {
-            const allowedOffers = Math.min(remaining, totalOffers);
-
-            // jeżeli mamy więcej ofert niż możemy wysłać w limicie – przytnij do allowedOffers
-            if (totalOffers > allowedOffers) {
-              if (existing.items.length > allowedOffers) {
-                existing.items = existing.items.slice(0, allowedOffers);
-              }
-              // nadwyżka poza limitem – ignorujemy, nie nabijamy jej do licznika
-              existing.skippedExtra = 0;
-            }
-            
-            // WAŻNE: licznik powinien liczyć WSZYSTKIE oferty (nawet te ukryte w skippedExtra),
-            // ponieważ użytkownik widzi "10 + 84 dodatkowych" i oczekuje że licznik to odzwierciedla
-            const inc = existing.items.length + (existing.skippedExtra || 0);
-
-            if (inc > 0) {
-              const text = buildBatchMessage(link, existing.items, existing.skippedExtra);
-              const __okBatch = await sendTelegram("sendMessage", {
-                chat_id: chatId,
-                text,
-                parse_mode: "HTML",
-                disable_web_page_preview: false,
-                reply_markup: {
-                  inline_keyboard: [
-                    [{ text: __fydBtnText(rowLang, "disable"), callback_data: `lnmode:${link.id}:off` }],
-                    [
-                      { text: __fydBtnText(rowLang, "single"), callback_data: `lnmode:${link.id}:single` },
-                      { text: __fydBtnText(rowLang, "batch"), callback_data: `lnmode:${link.id}:batch` },
-                    ],
-                  ],
-                },
-              });
-              if (__okBatch) await __fydBumpChatDailyCount(notifyPool, chatId, userId, userTz, inc);
-              batchBuffers.delete(key);
-              sentSomething = true;
-            } else {
-              batchBuffers.delete(key);
-            }
-          }
-        }
-      }
-
-      if (sentSomething) {
-        await notifyPool.query(
-          `
-          UPDATE chat_notifications
-          SET last_notified_at = NOW(),
-              updated_at = NOW()
-          WHERE chat_id = $1 AND user_id = $2
-          `,
-          [chatId, userId]
-        );
-      }
-    }
-  } catch (err) {
-    console.error("Błąd notifyChatsForLink:", err);
-  }
-}
-// ---- FYD: daily notifications limit (used by notifyChatsForLink) ----
-async function getDailyLimitForUserId(db, userId) {
-  const uid = Number(userId);
-  if (!Number.isFinite(uid) || uid <= 0) return 200;
-
-  const baseFromPlan = (planCode) => {
-    const p = String(planCode || "").toLowerCase();
-    if (p === "platinum") return 200;
-    if (p === "growth" || p === "pro") return 400;
-    if (p === "starter" || p === "basic") return 200;
-    if (p === "trial") return 200;
-    return 200;
-  };
-
-  let planCode = "";
-  let dailyFromView = 0;
-
-  try {
-    const r = await db.query(
-      `SELECT
-         COALESCE(daily_notifications_limit, 0) AS daily,
-         COALESCE(plan_code, '') AS plan_code
-       FROM user_entitlements_v
-       WHERE user_id=$1
-       LIMIT 1`,
-      [uid]
-    );
-    if (r && r.rows && r.rows.length) {
-      dailyFromView = Number(r.rows[0].daily || 0);
-      planCode = r.rows[0].plan_code || "";
-    }
-  } catch (e) {
-    console.log("[daily_limit_debug_err] user_id=" + uid, e?.message || e);
-  }
-
-  let addons = 0;
-  try {
-    const rAdd = await db.query(
-      `SELECT COALESCE(SUM(COALESCE(addon_qty,0)),0)::int AS n
-       FROM subscriptions
-       WHERE user_id=$1 AND status='active'`,
-      [uid]
-    );
-    addons = Number(rAdd.rows?.[0]?.n ?? 0) || 0;
-    if (!Number.isFinite(addons) || addons < 0) addons = 0;
-  } catch (e) {
-    console.log("[daily_limit_addons_err] user_id=" + uid, e?.message || e);
-  }
-
-  let maxDaily = 0;
-  if (Number.isFinite(dailyFromView) && dailyFromView > 0) {
-    maxDaily = dailyFromView;
-  } else {
-    maxDaily = baseFromPlan(planCode) + addons * 100;
-  }
-
-  if (!Number.isFinite(maxDaily) || maxDaily <= 0) maxDaily = 200;
-
-  console.log("[daily_limit_debug_v2] user_id=" + uid +
-    " plan_code=" + planCode +
-    " daily_from_view=" + dailyFromView +
-    " addons=" + addons +
-    " maxDaily=" + maxDaily);
-
-  return maxDaily;
-}
-
-// ---- FYD: daily notifications limit END ----
-
-// ---------- Scraping OLX ----------
-async function scrapeOlx(url, __fydAttempt = 1, __fydForceNoProxy = false) {
-  url = normalizeOlxUrl(String(url || ""));
-
-  const __fydProxyEnabled = (() => { const v = String(process.env.PROXY_ENABLED || "").trim().toLowerCase(); return (v === "1" || v === "true" || v === "yes"); })();
-// __FYD_OLX_RETRY_WRAPPER_V2__
-  // __FYD_SCRAPE_OLX_RELAUNCH_V1__
-// __FYD_PROXY_FIX_V3__
-  // FYD proxy config (single source of truth, no TDZ)
-  const __fydProxyOnRaw = String(process.env.PROXY_ENABLED || "").trim().toLowerCase();
-  const __fydProxyEnabledV3 =
-    (__fydProxyOnRaw === "1" || __fydProxyOnRaw === "true" || __fydProxyOnRaw === "yes" || __fydProxyOnRaw === "on") &&
-    String(process.env.PROXY_SERVER || "").trim();
-
-  const __fydProxyOpts = __fydProxyEnabledV3
-    ? {
-        server: String(process.env.PROXY_SERVER || "").trim(),
-        username: String(process.env.PROXY_USERNAME || process.env.PROXY_USER || "").trim(),
-        password: String(process.env.PROXY_PASSWORD || process.env.PROXY_PASS || "").trim(),
-      }
-    : undefined;
-
-  // Robust: relaunch browser on crashes + last attempt without proxy (OLX często nie lubi proxy)
-  const baseArgs = ["--no-sandbox", "--disable-dev-shm-usage"];
-
-  const makeContext = async (useProxy) => {
-    const launchOpts = { args: baseArgs.slice() };
-    // FYD: proxy only for Vinted (OLX without proxy)
-    if (useProxy && __fydProxyOpts) launchOpts.proxy = __fydProxyOpts;
-
-    await __fydChromiumGuard("pw");
-
-    const browser = await chromium.launch(launchOpts);
-    __fydBrowserPid = (browser && typeof browser.process === "function" && browser.process() && browser.process().pid) ? browser.process().pid : null;
-    const context = await browser.newContext({
-      locale: "pl-PL",
-      timezoneId: "Europe/Warsaw",
-      userAgent:
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    });
-    context.setDefaultTimeout(45000);
-    context.setDefaultNavigationTimeout(45000);
-    return { browser, context };
-  };
-
-  const setupPage = async (p) => {
-    try {
-      await p.route(/.*/i, (route) => {
-        const t = route.request().resourceType();
-        try { const h = new URL(route.request().url()).hostname.toLowerCase(); if (__FYD_BLOCK_HOST_RE.test(h)) return route.abort(); } catch {}
-        if (t === "image" || t === "media" || t === "font") return route.abort();
-        return route.continue();
-      });
-    } catch {}
-    p.setDefaultNavigationTimeout(60000);
-    p.setDefaultTimeout(60000);
-  };
-
-  function deriveOlxTitleFromUrl(u) {
-    try {
-      const uu = new URL(u);
-      const parts = uu.pathname.split("/").filter(Boolean);
-      if (!parts.length) return null;
-      let last = parts[parts.length - 1];
-      last = last.replace(/\.[a-z0-9]+$/i, "");
-      let slugParts = last.split("-");
-      slugParts = slugParts.filter((p) => {
-        const up = p.toUpperCase();
-        if (up.startsWith("CID")) return false;
-        if (up.startsWith("ID") && up.length > 2) return false;
-        return true;
-      });
-      if (!slugParts.length) return null;
-      const pretty = slugParts
-        .join(" ")
-        .split(" ")
-        .filter(Boolean)
-        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-        .join(" ");
-      return pretty || null;
-    } catch {
-      return null;
-    }
-  }
-
-  let lastErr = null;
-  let __fydBrowserPid = null;
-
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    const useProxy = (!__fydForceNoProxy) && (attempt === 2) && !!__fydProxyOpts; // OLX: attempt2 proxy fallback
-    console.log(`[olx] attempt /2 START (proxy=${useProxy ? "on" : "off"}) url=${normalizeOlxUrl(normalizeOlxUrl(url))}`);
-
-    const __now = Date.now();
-    const __until = globalThis.__olxBackoffUntil || 0;
-    if (__now < __until) {
-      const __last = globalThis.__olxBackoffLastLog || 0;
-      if (__now - __last > 30000) {
-        globalThis.__olxBackoffLastLog = __now;
-        console.log(`[olx] OLX_BACKOFF_ACTIVE left_ms=${__until - __now}`);
-      }
-      return [];
-    }
-    try { console.log(`[olx] attempt /2 start (proxy=${useProxy ? "on" : "off"}) url=${normalizeOlxUrl(normalizeOlxUrl(url))}`); } catch {}
-
-
-    let browser = null;
-    const __closeAll = async () => {
-      const __fydCloseWithTimeout = async (fn, ms) => {
-        try {
-          if (!fn) return;
-          await Promise.race([
-            fn(),
-            new Promise((resolve) => setTimeout(resolve, ms)),
-          ]).catch(() => null);
-        } catch {}
-      };
-
-      try { if (page) await __fydCloseWithTimeout(() => page.close(), 3000); } catch {}
-      try { if (context) await __fydCloseWithTimeout(() => context.close(), 3000); } catch {}
-      try { if (browser) await __fydCloseWithTimeout(() => browser.close(), 5000); } catch {}
-
-      // HARD KILL: jeśli Playwright/chromium się zawiesił i close nie ubił procesu
-      try {
-        if (__fydBrowserPid) {
-          try { process.kill(__fydBrowserPid, 0); } catch { __fydBrowserPid = null; }
-          if (__fydBrowserPid) {
-            try { console.log("[guard] HARD_KILL pid=" + __fydBrowserPid); } catch {}
-            try { require("child_process").execSync("pkill -P " + __fydBrowserPid + " || true", { stdio: "ignore", timeout: 2000 }); } catch {}
-            try { process.kill(__fydBrowserPid, "SIGKILL"); } catch {}
-          }
-        }
-      } catch {}
+// Parsowanie atrybutu title z Vinted (fallback dla DOM)
+function parseVintedMeta(titleAttr, fallbackTitle) {
+  if (!titleAttr) {
+    return {
+      title: fallbackTitle || "",
+      brand: null,
+      size: null,
+      condition: null,
+      rawPriceFromTitle: null,
     };
-
-    let context = null;
-    let page = null;
-
-    try {
-      ({ browser, context } = await makeContext(useProxy));
-      __fydBrowserPid = (browser && typeof browser.process === "function" && browser.process() && browser.process().pid) ? browser.process().pid : null;
-      page = await context.newPage();
-
-      // blokuj ciężkie zasoby
-      try {
-        await page.route("**/*", (route) => {
-          const t = route.request().resourceType();
-        try { const h = new URL(route.request().url()).hostname.toLowerCase(); if (__FYD_BLOCK_HOST_RE.test(h)) return route.abort(); } catch {}
-          if (t === "image" || t === "media" || t === "font") return route.abort();
-          return route.continue();
-        });
-      } catch {}
-      // await __fydBlockHeavyAssets(page); // DISABLED: breaks OLX dynamic loading
-      // await setupPage(page); // DISABLED for OLX (debug)
-
-      // nawigacja
-      // __FYD_OLX_START_V2__
-      console.log(`[olx] attempt /2 START (proxy=${useProxy ? "on" : "off"}) url=${normalizeOlxUrl(normalizeOlxUrl(url))}`);
-            const navUrl = String(url || "").replace(/^https?:\/\/www\.olx\.pl/i, "https://www.olx.pl");
-      await page.goto(__fixOlxUrl(navUrl), { waitUntil: "domcontentloaded", timeout: 60000 });
-// __FYD_OLX_READY_LOG_V2__
-      try { console.log(`[olx] ready (proxy=${useProxy ? "on" : "off"}) url=${page.url()}`); } catch {}
-      // __FYD_OLX_READY_V1__
-      // __FYD_OLX_AFTER_GOTO_V1__
-      try {
-        const __t = await page.title().catch(()=>"(no title)");
-        const __u = page.url();
-        const __cards = await page.locator('div[data-cy="l-card"]').count().catch(()=>-1);
-        const __offers = await page.locator('a[href*="/d/oferta/"], a[href*="/oferta/"]').count().catch(()=>-1);
-        console.log(`[olx] after_goto title=${__t} cards=${__cards} offerLinks=${__offers} url=${__u}`);
-
-    await __olxCloudfrontMaybeBackoff(page);
-        globalThis.__olxCloudfrontHits = 0;
-        // __FYD_OLX_FAST_RETURN_V10__
-        try {
-          if (typeof page !== "undefined" && page && page.$$eval) {
-            const __fydLinks = await page.$$eval('a[href*="/d/oferta/"]', (as) => {
-              const out = [];
-              for (const a of as) {
-                const href = a && a.href ? String(a.href) : "";
-                if (href) out.push(href);
-              }
-              return Array.from(new Set(out));
-            });
-            if (Array.isArray(__fydLinks) && __fydLinks.length) {
-              console.log(`[olx] fast_return links=${__fydLinks.length}`);
-              await __closeAll();
-              return __fydLinks;
-            }
-          }
-        } catch (e) {}
-
-      } catch {}
-
-      // __FYD_OLX_READY_LOG_V1__
-      try {
-        console.log(`[olx] ready (proxy=${useProxy ? "on" : "off"}) url=${page.url()}`);
-      } catch {}
-
-  try {
-    const __fydCookieBtn = page
-      .locator('#onetrust-accept-btn-handler, button:has-text("Zgadzam"), button:has-text("Akceptuj"), button:has-text("Accept")')
-      .first();
-    if ((await __fydCookieBtn.count()) > 0) await __fydCookieBtn.click({ timeout: 3000 });
-  } catch {}
-  try {
-  const __t = await page.title().catch(()=>"(no title)");
-  const __u = page.url();
-  const __c = await page.locator('div[data-cy="l-card"]').count().catch(()=>-1);
-  console.log(`[olx] after_goto title=${__t} cards=${__c} url=${__u}`);
-  // __FYD_OLX_FAST_RETURN_V10__
-  try {
-    if (typeof page !== "undefined" && page && page.$$eval) {
-      const __fydLinks = await page.$$eval('a[href*="/d/oferta/"]', (as) => {
-        const out = [];
-        for (const a of as) {
-          const href = a && a.href ? String(a.href) : "";
-          if (href) out.push(href);
-        }
-        return Array.from(new Set(out));
-      });
-      if (Array.isArray(__fydLinks) && __fydLinks.length) {
-        console.log(`[olx] fast_return links=${__fydLinks.length}`);
-        await __closeAll();
-              return __fydLinks;
-            }
-    }
-  } catch (e) {}
-
-} catch {}
-await page.waitForSelector('div[data-cy="l-card"]', { timeout: 60000 });
-await page.waitForTimeout(800);
-
-      const rawItems = await page.$$eval('div[data-cy="l-card"]', (cards) => {
-        const results = [];
-        for (const card of cards) {
-          const linkEl = card.querySelector('a[href*="/oferta/"], a[href*="/d/oferta/"]');
-          if (!linkEl) continue;
-
-          const url = (() => {
-            try {
-              const u = new URL(linkEl.href);
-              u.hash = "";
-              u.search = "";
-              u.pathname = u.pathname.replace(/^\/d\/oferta\//, "/oferta/");
-              return u.toString();
-            } catch {
-              // __FYD_OLX_NO_EXIT_IN_CATCH_FINALLY__ return (linkEl.href || "").split("#")[0].split("?")[0].replace("/d/oferta/", "/oferta/");
-            }
-          })();
-
-          let title = "";
-          const titleEl =
-            card.querySelector('[data-cy="ad-card-title"]') ||
-            card.querySelector('[data-testid="ad-title"]') ||
-            linkEl.querySelector("h6") ||
-            linkEl.querySelector("h3") ||
-            card.querySelector("h6") ||
-            card.querySelector("h3");
-          if (titleEl) title = (titleEl.innerText || titleEl.textContent || "").trim();
-          if (!title && linkEl.getAttribute("title")) title = linkEl.getAttribute("title").trim();
-          if (!title) title = (linkEl.innerText || linkEl.textContent || "").trim();
-
-          let priceText = "";
-          const priceEl = card.querySelector('[data-testid="ad-price"]') || card.querySelector('[data-cy="ad-card-price"]');
-          if (priceEl) priceText = (priceEl.innerText || priceEl.textContent || "").trim();
-
-          const img = card.querySelector("img");
-          let photoUrl = null;
-          if (img) {
-            photoUrl = img.src || img.getAttribute("src") || img.getAttribute("data-src") || (img.getAttribute("srcset") || "").split(" ")[0] || null;
-          }
-
-          const text = card.innerText || card.textContent || "";
-          const hasOlxDelivery = /Przesyłka OLX/i.test(text);
-
-          results.push({ url, title, rawPrice: priceText, photoUrl, hasOlxDelivery });
-        }
-        return results;
-      });
-
-      let items = rawItems.map((it) => {
-        let finalTitle = it.title || "";
-        if (!finalTitle || /^wyróżnione$/i.test(finalTitle)) {
-          const fromUrl = deriveOlxTitleFromUrl(it.url);
-          if (fromUrl) finalTitle = fromUrl;
-        }
-
-        const { price, currency } = parsePrice(it.rawPrice);
-        const u = normalizeOlxUrl(it.url);
-        const itemKey = normalizeKey(u);
-
-        return {
-          url: u,
-          title: finalTitle,
-          price,
-          currency,
-          brand: null,
-          size: null,
-          condition: null,
-          photoUrl: it.photoUrl,
-          hasOlxDelivery: it.hasOlxDelivery,
-          buyUrl: it.hasOlxDelivery ? it.url : null,
-          itemKey,
-          item_key: itemKey,
-        };
-      });
-
-      await __closeAll();
-      return items;
-    } catch (e) {
-      lastErr = e;
-      const msg = (e && e.message) ? e.message : String(e || "");
-      console.log("[olx] attempt " + attempt + "/2 failed (proxy=" + (useProxy ? "on" : "off") + "): " + msg);
-      await __closeAll();
-
-      // CloudFront na direct -> od razu attempt2 przez proxy (bez sleep)
-      if (msg === "OLX_CLOUDFRONT_BLOCK" && attempt === 1 && !__fydForceNoProxy && __fydProxyOpts) {
-        continue;
-      }
-    }
-
-    await sleep(1500 * attempt);
-
-    if (attempt < 2) continue;
-    throw lastErr;
   }
-  // __FYD_OLX_ATTEMPTS_FALLBACK_V1__
-  if (lastErr) return [];
 
-      // FYD: removed early-exit to allow attempt 2/3
+  const segments = titleAttr.split(/\s*,\s*/);
+  let title = segments[0] || fallbackTitle || "";
+
+  let brand = null;
+  let size = null;
+  let condition = null;
+  let rawPriceFromTitle = null;
+
+  for (let i = 1; i < segments.length; i++) {
+    const seg = segments[i] || "";
+    const lower = seg.toLowerCase();
+    let m;
+
+    m = seg.match(/^marka:\s*(.+)$/i);
+    if (m) {
+      brand = m[1].trim();
+      continue;
+    }
+
+    m = seg.match(/^(stan|condition):\s*(.+)$/i);
+    if (m) {
+      condition = m[2].trim();
+      continue;
+    }
+
+    m = seg.match(/^rozmiar:\s*(.+)$/i);
+    if (m) {
+      size = m[1].trim();
+      continue;
+    }
+
+    if (/\d/.test(seg) && !/zawiera/i.test(lower)) {
+      rawPriceFromTitle = seg.trim();
+    }
+  }
+
+  return {
+    title,
+    brand,
+    size,
+    condition,
+    rawPriceFromTitle,
+  };
 }
 
- // ---------- Scraping Vinted ----------
-
-function pickArrayFromApi(data) {
-  if (!data || typeof data !== "object") return [];
-  if (Array.isArray(data.items)) return data.items;
-  if (Array.isArray(data.catalog_items)) return data.catalog_items;
-  if (Array.isArray(data?.data?.items)) return data.data.items;
-  if (Array.isArray(data?.data?.catalog_items)) return data.data.catalog_items;
-  return [];
-}
-
-
-
-
+// Domyślna waluta dla Vinted na podstawie URL-a / domeny
 function getVintedFallbackCurrency(linkUrl) {
   try {
     const u = new URL(linkUrl);
@@ -2479,15 +462,18 @@ function getVintedFallbackCurrency(linkUrl) {
     if (cur) return cur.toUpperCase();
     const h = (u.hostname || "").toLowerCase();
     if (h.endsWith(".pl")) return "PLN";
-    return null;
+    if (h.endsWith(".fr")) return "EUR";
+    if (h.endsWith(".de")) return "EUR";
+    if (h.endsWith(".be")) return "EUR";
+    if (h.endsWith(".es")) return "EUR";
+    if (h.endsWith(".it")) return "EUR";
   } catch {
-    return null;
+    // ignore
   }
+  return null;
 }
 
-
-
-
+// Buduje URL do API Vinted na podstawie URL /catalog
 function buildVintedApiUrl(catalogUrl) {
   const u = new URL(catalogUrl);
   const api = new URL("/api/v2/catalog/items", u.origin);
@@ -2495,16 +481,28 @@ function buildVintedApiUrl(catalogUrl) {
   const inP = u.searchParams;
   const outP = api.searchParams;
 
+  // wymagane
   outP.set("page", inP.get("page") || "1");
   outP.set("per_page", "96");
 
-  const scalarKeys = ["search_text", "currency", "price_from", "price_to", "order", "search_by_image_uuid"];
+  // scalary
+  const scalarKeys = [
+    "search_text",
+    "currency",
+    "price_from",
+    "price_to",
+    "order",
+    "search_by_image_uuid",
+  ];
   for (const k of scalarKeys) {
     const v = inP.get(k);
     if (v != null && v !== "") outP.set(k, v);
   }
+
+  // domyślnie newest_first jeśli nie ma
   if (!outP.get("order")) outP.set("order", "newest_first");
 
+  // tablice
   for (const [k, v] of inP.entries()) {
     if (k === "time") continue;
     if (k === "catalog[]") outP.append("catalog_ids[]", v);
@@ -2519,224 +517,825 @@ function buildVintedApiUrl(catalogUrl) {
   return api.toString();
 }
 
+// ---------- Filtrowanie pod użytkownika ----------
 
+function matchFilters(item, filters = {}) {
+  if (!filters || Object.keys(filters).length === 0) return true;
 
+  const price = typeof item.price === "number" ? item.price : null;
 
-function getVintedItemIdFromUrl(urlOrKey) {
-  try {
-    const u = new URL(urlOrKey);
-    const m = u.pathname.match(/^\/items\/(\d+)(?:-|\/|$)/i);
-    if (!m) return null;
-    const n = Number(m[1]);
-    return Number.isFinite(n) ? n : null;
-  } catch {
-    const s = String(urlOrKey || "").trim();
-    if (/^\d+$/.test(s)) {
-      const n = Number(s);
-      return Number.isFinite(n) ? n : null;
+  if (filters.minPrice != null && price != null && price < filters.minPrice) {
+    return false;
+  }
+  if (filters.maxPrice != null && price != null && price > filters.maxPrice) {
+    return false;
+  }
+
+  if (Array.isArray(filters.brand) && filters.brand.length) {
+    const brandLower = (item.brand || "").toLowerCase();
+    const ok = filters.brand.some((b) =>
+      brandLower.includes(String(b).toLowerCase())
+    );
+    if (!ok) return false;
+  }
+
+  if (Array.isArray(filters.sizes) && filters.sizes.length) {
+    const sizeLower = (item.size || "").toLowerCase();
+    const ok = filters.sizes.some(
+      (s) => sizeLower === String(s).toLowerCase()
+    );
+    if (!ok) return false;
+  }
+
+  if (Array.isArray(filters.conditions) && filters.conditions.length) {
+    const condLower = (item.condition || "").toLowerCase();
+    const ok = filters.conditions.some((c) =>
+      condLower.includes(String(c).toLowerCase())
+    );
+    if (!ok) return false;
+  }
+
+  return true;
+}
+
+// ---------- Telegram – wysyłka (photo / message, retry na 429) ----------
+async function sendTelegram(method, payload) {
+  if (!TG) {
+    console.error(
+      "sendTelegram: brak TELEGRAM_BOT_TOKEN (TG) – nie wysyłam wiadomości"
+    );
+    return { ok: false, status: 0, body: null, rawText: null };
+  }
+
+  const url = `https://api.telegram.org/bot${TG}/${method}`;
+
+  while (true) {
+    try {
+      logDebug(
+        "sendTelegram: request",
+        JSON.stringify({
+          method,
+          url,
+          chat_id: payload && payload.chat_id,
+        })
+      );
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const text = await res.text().catch(() => "");
+      let parsed = null;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = null;
+      }
+
+      if (res.status === 429) {
+        let retry = 30;
+        try {
+          if (parsed?.parameters?.retry_after) {
+            retry = Number(parsed.parameters.retry_after) || retry;
+          }
+        } catch {
+          // ignore
+        }
+
+        console.warn(
+          `sendTelegram: rate limit 429, retry_after=${retry}s, body=${text}`
+        );
+        await sleep(retry * 1000);
+        continue;
+      }
+
+      const ok = res.ok && (parsed?.ok !== false);
+
+      if (!ok) {
+        console.error(
+          "sendTelegram: HTTP/Telegram error",
+          JSON.stringify({
+            status: res.status,
+            statusText: res.statusText,
+            body: text,
+          })
+        );
+      } else {
+        logDebug(
+          "sendTelegram: OK",
+          JSON.stringify({
+            method,
+            status: res.status,
+            chat_id: payload && payload.chat_id,
+          })
+        );
+      }
+
+      return { ok, status: res.status, body: parsed ?? text, rawText: text };
+    } catch (err) {
+      console.error("sendTelegram: exception", err);
+      await sleep(2000);
+      return { ok: false, status: 0, body: null, rawText: null };
     }
-    return null;
   }
 }
 
+function formatLinkHeader(link) {
+  const src = (link.source || detectSource(link.url) || "").toUpperCase();
 
+  let label = link.name || "";
 
-
-function parseVintedMeta(titleAttr, fallbackTitle) {
-  const fallback = String(fallbackTitle || "").trim();
-  const tattr = String(titleAttr || "").trim();
-
-  if (!tattr) {
-    return { title: fallback, brand: null, size: null, condition: null, rawPriceFromTitle: null };
+  if (!label) {
+    if (src === "OLX") label = "OLX wyszukiwanie";
+    else if (src === "VINTED") label = "Vinted wyszukiwanie";
+    else label = link.url || "Monitoring";
   }
 
-  const segments = tattr.split(/\s*,\s*/);
-  let title = (segments[0] || fallback || "").trim();
-
-  let brand = null;
-  let size = null;
-  let condition = null;
-  let rawPriceFromTitle = null;
-
-  for (let i = 1; i < segments.length; i++) {
-    const seg = String(segments[i] || "").trim();
-    if (!seg) continue;
-
-    const lower = seg.toLowerCase();
-    let m;
-
-    m = seg.match(/^marka:\s*(.+)$/i);
-    if (m) { brand = m[1].trim(); continue; }
-
-    m = seg.match(/^(stan|condition):\s*(.+)$/i);
-    if (m) { condition = m[2].trim(); continue; }
-
-    m = seg.match(/^rozmiar:\s*(.+)$/i);
-    if (m) { size = m[1].trim(); continue; }
-
-    m = seg.match(/^brand:\s*(.+)$/i);
-    if (m) { brand = m[1].trim(); continue; }
-
-    m = seg.match(/^size:\s*(.+)$/i);
-    if (m) { size = m[1].trim(); continue; }
-
-    if (!rawPriceFromTitle && /\d/.test(seg) && !/zawiera|includes/i.test(lower)) rawPriceFromTitle = seg;
-  }
-
-  return { title, brand, size, condition, rawPriceFromTitle };
+  const idPart = link.id ? ` · <i>ID ${link.id}</i>` : "";
+  return `🔍 <b>${escapeHtml(label)}</b>${idPart}`;
 }
 
+async function countSentOffersSince(userId, chatId, since) {
+  try {
+    const res = await notifyPool.query(
+      `SELECT COUNT(*)::int AS cnt FROM sent_offers WHERE user_id = $1 AND chat_id = $2 AND sent_at >= $3`,
+      [Number(userId), String(chatId), since]
+    );
+    return res.rows[0]?.cnt ?? 0;
+  } catch (e) {
+    console.error("countSentOffersSince error", e);
+    return 0;
+  }
+}
 
+async function insertSentOffers(rows = []) {
+  const arr = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!arr.length) return 0;
 
-/* __FYD_VINTED_PW_FORCE2_HELPER_V2__
-   Playwright fallback dla Vinted katalogu:
-   - bierze URL + titleAttr + text + photoUrl
-   - mapuje do normalnych itemów (title/price/currency/photo) jak DOM fallback
-*/
-async function __fydVintedCatalogViaPlaywright(catalogUrl) {
-  const url = String(catalogUrl || "").trim();
-  if (!url) return [];
+  const userIds = [];
+  const chatIds = [];
+  const linkIds = [];
+  const itemIds = [];
+  const prices = [];
+  const currencies = [];
+  const titles = [];
+  const urls = [];
+  const sentAts = [];
 
-  let origin = "";
-  try { origin = new URL(url).origin; } catch {}
+  for (const r of arr) {
+    userIds.push(Number(r.user_id));
+    chatIds.push(String(r.chat_id));
+    linkIds.push(Number(r.link_id));
+    itemIds.push(String(r.item_id));
+    prices.push(r.price != null ? Number(r.price) : null);
+    currencies.push(r.currency != null ? String(r.currency) : null);
+    titles.push(r.title != null ? String(r.title) : null);
+    urls.push(r.url != null ? String(r.url) : null);
+    sentAts.push(r.sent_at ? r.sent_at : new Date());
+  }
 
-  const fallbackCurrency = getVintedFallbackCurrency(url);
+  const res = await notifyPool.query(
+    `
+    INSERT INTO sent_offers (user_id, chat_id, link_id, item_id, price, currency, title, url, sent_at)
+    SELECT * FROM UNNEST(
+      $1::int[],
+      $2::text[],
+      $3::int[],
+      $4::text[],
+      $5::numeric[],
+      $6::text[],
+      $7::text[],
+      $8::text[],
+      $9::timestamptz[]
+    )
+    ON CONFLICT (chat_id, link_id, item_id) DO NOTHING
+    `,
+    [userIds, chatIds, linkIds, itemIds, prices, currencies, titles, urls, sentAts]
+  );
 
-  await __fydChromiumGuard("pw");
+  return res.rowCount || 0;
+}
 
-  const browser = await chromium.launch({
- headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+function toSentOfferRow(userId, chatId, link, item) {
+  const itemId = getItemKey(item) || item?.url || item?.title || null;
+  if (!userId || !chatId || !link?.id || !itemId) return null;
+
+  return {
+    user_id: Number(userId),
+    chat_id: String(chatId),
+    link_id: Number(link.id),
+    item_id: String(itemId),
+    price: item?.price,
+    currency: item?.currency,
+    title: item?.title,
+    url: item?.url,
+    sent_at: new Date(),
+  };
+}
+
+function hiddenLink(url) {
+  return `<a href="${escapeHtml(url)}">\u200B</a>`;
+}
+
+// wysyłka pojedynczej karty (photo / message) na konkretny chat
+async function tgSendItem(chatId, link, item, lang = "en", meta = {}) {
+  if (!TG) return { sent: false, inserted: 0 };
+
+  const userId = meta?.userId ?? link.user_id ?? link.userId ?? null;
+
+  const src = (link.source || detectSource(link.url) || "").toLowerCase();
+  
+  // Normalizuj język (pl-PL → pl, en-US → en, itp.)
+  const normalizedLang = (lang || "en").toLowerCase().split("-")[0];
+  
+  // Mapy tekstów per język
+  const texts = {
+    pl: {
+      disable: "🔕 Wyłącz ten link",
+      single: "📨 Pojedynczo",
+      batch: "📦 Zbiorczo",
+      buyNow: "⚡ Kup teraz",
+    },
+    en: {
+      disable: "🔕 Disable this link",
+      single: "📨 Single",
+      batch: "📦 Batch",
+      buyNow: "⚡ Buy now",
+    },
+  };
+  
+  const t = texts[normalizedLang] || texts.en;
+
+  const header = formatLinkHeader(link);
+  let caption = `${header}\n\n<b>${escapeHtml(item.title || "")}</b>\n`;
+
+  if (item.price != null) {
+    const priceStr = `${item.price} ${item.currency || ""}`.trim();
+    caption += `\n💰 ${escapeHtml(priceStr)}`;
+  }
+
+  if (item.brand) caption += `\n🏷️ ${escapeHtml(item.brand)}`;
+  if (item.size) caption += `\n📏 ${escapeHtml(item.size)}`;
+  if (item.condition) caption += `\n✨ ${escapeHtml(item.condition)}`;
+
+  caption += `\n\n${hiddenLink(item.url)}`;
+
+  const keyboard = [
+    [
+      {
+        text: "URL",
+        url: item.url,
+      },
+    ],
+  ];
+
+  if (src === "olx" && item.hasOlxDelivery && item.buyUrl) {
+    keyboard.push([
+      {
+        text: t.buyNow,
+        url: item.buyUrl,
+      },
+    ]);
+  }
+
+  keyboard.push([
+    {
+      text: t.disable,
+      callback_data: `lnmode:${link.id}:off`,
+    },
+  ]);
+  keyboard.push([
+    {
+      text: t.single,
+      callback_data: `lnmode:${link.id}:single`,
+    },
+    {
+      text: t.batch,
+      callback_data: `lnmode:${link.id}:batch`,
+    },
+  ]);
+
+  const replyMarkup = { inline_keyboard: keyboard };
+
+  const canSendPhoto =
+    src === "vinted" &&
+    item.photoUrl &&
+    typeof item.photoUrl === "string" &&
+    /^https?:\/\//i.test(item.photoUrl);
+
+  const sendRes = canSendPhoto
+    ? await sendTelegram("sendPhoto", {
+        chat_id: chatId,
+        photo: item.photoUrl,
+        caption,
+        parse_mode: "HTML",
+        reply_markup: replyMarkup,
+      })
+    : await sendTelegram("sendMessage", {
+        chat_id: chatId,
+        text: caption,
+        parse_mode: "HTML",
+        disable_web_page_preview: false,
+        reply_markup: replyMarkup,
+      });
+
+  const sentOk = !!sendRes?.ok;
+  let inserted = 0;
+
+  if (sentOk) {
+    const row = toSentOfferRow(userId, chatId, link, item);
+    if (row) {
+      inserted = await insertSentOffers([row]);
+    }
+    if (inserted) {
+      console.error(`[sent_debug] chat=${chatId} link=${link.id} sent_n=${inserted}`);
+    }
+  }
+
+  await sleep(SLEEP_BETWEEN_ITEMS_MS);
+  return { sent: sentOk, inserted };
+}
+
+// tekst do trybu /zbiorcze
+function buildBatchMessage(link, items, skippedExtra = 0) {
+  const header = formatLinkHeader(link);
+  let text = `🆕 Nowe ogłoszenia\n${header}\n\n`;
+
+  items.forEach((item, idx) => {
+    const title = escapeHtml(item.title || "");
+    const priceStr =
+      item.price != null
+        ? `${item.price} ${item.currency || ""}`.trim()
+        : "";
+
+    text += `${idx + 1}. ${title}\n`;
+    if (priceStr) text += `💰 ${escapeHtml(priceStr)}\n`;
+    text += `${item.url}\n\n`;
+  });
+
+  if (skippedExtra > 0) text += `+ ${skippedExtra} dodatkowych ofert.\n\n`;
+  text += `Pełną historię zobaczysz w /najnowsze ${link.id}`;
+
+  return text.trim();
+}
+
+function makeBatchKey(chatId, userId, linkId) {
+  return `${userId}:${chatId}:${linkId}`;
+}
+
+// Wysyłka powiadomień dla danego linku
+async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
+  if (!items || !items.length) return;
+
+  const minBatchItems = opts.minBatchItems || MIN_BATCH_ITEMS;
+
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const nowHour = now.getHours();
+  const todayStart = getTodayStart();
+
+  try {
+    const res = await notifyPool.query(
+      `
+      SELECT
+        cn.chat_id,
+        cn.user_id,
+        cn.enabled,
+        cn.mode AS chat_mode,
+        cn.daily_count,
+        cn.daily_count_date,
+        LOWER(COALESCE(lnm.mode, cn.mode)) AS effective_mode,
+        lnm.mode AS link_mode,
+        u.plan_name,
+        u.extra_link_packs,
+        COALESCE(NULLIF(u.lang,''), 'en') AS lang,
+        qh.quiet_enabled,
+        qh.quiet_from,
+        qh.quiet_to
+      FROM links l
+      JOIN chat_notifications cn
+        ON cn.user_id = l.user_id
+       AND (l.chat_id IS NULL OR cn.chat_id = l.chat_id)
+      JOIN users u
+        ON u.id = l.user_id
+      LEFT JOIN link_notification_modes lnm
+        ON lnm.user_id = cn.user_id
+       AND lnm.chat_id = cn.chat_id
+       AND lnm.link_id = l.id
+      LEFT JOIN chat_quiet_hours qh
+        ON qh.chat_id = cn.chat_id
+      WHERE l.id = $1
+      `,
+      [link.id]
+    );
+
+    if (!res.rowCount) {
+      logDebug(
+        `notifyChatsForLink: link ${link.id} – brak rekordów chat_notifications`
+      );
+      return;
+    }
+
+    let chatRows = res.rows.map((row) => ({
+      ...row,
+      mode: (row.effective_mode || "single").toLowerCase(),
+    }));
+
+    if (DEBUG) {
+      logDebug(
+        `[notify] link=${link.id} candidates=${chatRows.length} items=${items.length} skipped=${
+          skippedExtra || 0
+        }`
+      );
+      for (const r of chatRows) {
+        logDebug(
+          `[notify] link=${link.id} chat=${r.chat_id} enabled=${r.enabled} chat_mode=${
+            r.chat_mode
+          } link_mode=${r.link_mode || "-"} effective=${r.mode}`
+        );
+      }
+    }
+
+    // 1) odfiltruj czaty WYŁĄCZONE + OFF
+    const before = chatRows.length;
+    chatRows = chatRows.filter((row) => {
+      if (!row.enabled) {
+        logDebug(
+          `[skip] link=${link.id} chat=${row.chat_id} reason=chat_disabled`
+        );
+        return false;
+      }
+      if (row.mode === "off") {
+        logDebug(
+          `[skip] link=${link.id} chat=${row.chat_id} reason=mode_off chat_mode=${row.chat_mode} link_mode=${
+            row.link_mode || "-"
+          }`
+        );
+        return false;
+      }
+      return true;
+    });
+
+    if (!chatRows.length) {
+      logDebug(
+        `notifyChatsForLink: link ${link.id} – po filtrach 0 czatów (disabled/off) (było ${before})`
+      );
+      return;
+    }
+
+    for (const row of chatRows) {
+      const chatId = row.chat_id;
+      const userId = row.user_id;
+
+      // 2) cisza nocna
+      const quietEnabled = !!row.quiet_enabled;
+      const quietFrom =
+        typeof row.quiet_from === "number" ? row.quiet_from : 22;
+      const quietTo = typeof row.quiet_to === "number" ? row.quiet_to : 7;
+
+      if (quietEnabled && isHourInQuietRange(nowHour, quietFrom, quietTo)) {
+        logDebug(
+          `[skip] link=${link.id} chat=${chatId} reason=quiet_hours nowHour=${nowHour} range=${quietFrom}-${quietTo}`
+        );
+        continue;
+      }
+
+      // 3) limity dzienne – liczymy z sent_offers (SoT)
+      const dailyCount = await countSentOffersSince(userId, chatId, todayStart);
+
+      const planName = (row.plan_name || "none").toLowerCase();
+      const extraPacks = Number(row.extra_link_packs || 0);
+
+      let maxDaily = 0;
+      switch (planName) {
+        case "trial":
+          maxDaily = 50;
+          break;
+        case "starter":
+          maxDaily = 200;
+          break;
+        case "growth":
+          maxDaily = 400;
+          break;
+        case "platinum":
+          maxDaily = 700 + extraPacks * 100;
+          break;
+        default:
+          maxDaily = 0;
+      }
+
+      const remainingDaily = Math.max(0, maxDaily - dailyCount);
+
+      if (maxDaily <= 0 || remainingDaily <= 0) {
+        logDebug(
+          `[skip] link=${link.id} chat=${chatId} reason=daily_limit count=${dailyCount} max=${maxDaily}`
+        );
+
+        await notifyPool.query(
+          `
+          UPDATE chat_notifications
+          SET daily_count = $1,
+              daily_count_date = $2
+          WHERE chat_id = $3 AND user_id = $4
+          `,
+          [dailyCount, todayStr, chatId, userId]
+        );
+        batchBuffers.delete(makeBatchKey(chatId, userId, link.id));
+        continue;
+      }
+
+      const mode = row.mode === "batch" ? "batch" : "single";
+
+      let itemsForChat = items.slice(0, remainingDaily);
+      const droppedByDaily = items.length - itemsForChat.length;
+      let skippedForChat = (skippedExtra || 0) + droppedByDaily;
+
+      if (!itemsForChat.length) {
+        await notifyPool.query(
+          `
+          UPDATE chat_notifications
+          SET daily_count = $1,
+              daily_count_date = $2
+          WHERE chat_id = $3 AND user_id = $4
+          `,
+          [dailyCount, todayStr, chatId, userId]
+        );
+        continue;
+      }
+
+      logDebug(
+        `[send] link=${link.id} chat=${chatId} mode=${mode} items=${itemsForChat.length} skipped=${
+          skippedForChat || 0
+        } limit_left=${remainingDaily}`
+      );
+
+      let sentSomething = false;
+      let insertedTotal = 0;
+
+      if (mode === "single") {
+        for (const item of itemsForChat) {
+          const { sent, inserted } = await tgSendItem(chatId, link, item, row.lang, { userId });
+          if (sent) sentSomething = true;
+          insertedTotal += inserted || 0;
+        }
+      } else {
+        const key = makeBatchKey(chatId, userId, link.id);
+        const existing = batchBuffers.get(key) || { items: [], skippedExtra: 0 };
+
+        // przytnij istniejący bufor jeśli przekracza dostępny limit dzienny
+        const trimmedExisting = existing.items.slice(0, remainingDaily);
+        const trimmedOut = existing.items.length - trimmedExisting.length;
+        let totalSkipped = (existing.skippedExtra || 0) + trimmedOut + skippedForChat;
+
+        const availableForNew = Math.max(0, remainingDaily - trimmedExisting.length);
+        const newItems = itemsForChat.slice(0, availableForNew);
+        const droppedNew = itemsForChat.length - newItems.length;
+        totalSkipped += droppedNew;
+
+        const bufferState = { items: [...trimmedExisting, ...newItems], skippedExtra: totalSkipped };
+
+        if (bufferState.items.length < minBatchItems && bufferState.skippedExtra === 0) {
+          batchBuffers.set(key, bufferState);
+          logDebug(
+            `[batch] link=${link.id} chat=${chatId} buffered=${bufferState.items.length} min=${minBatchItems}`
+          );
+        } else {
+          const text = buildBatchMessage(link, bufferState.items, bufferState.skippedExtra);
+          const sendRes = await sendTelegram("sendMessage", {
+            chat_id: chatId,
+            text,
+            parse_mode: "HTML",
+            disable_web_page_preview: false,
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: "🔕 Wyłącz ten link", callback_data: `lnmode:${link.id}:off` },
+                ],
+                [
+                  { text: "📨 Pojedynczo", callback_data: `lnmode:${link.id}:single` },
+                  { text: "📦 Zbiorczo", callback_data: `lnmode:${link.id}:batch` },
+                ],
+              ],
+            },
+          });
+
+          if (sendRes?.ok) {
+            const rows = bufferState.items
+              .map((it) => toSentOfferRow(userId, chatId, link, it))
+              .filter(Boolean);
+            if (rows.length) {
+              insertedTotal = await insertSentOffers(rows);
+              if (insertedTotal) {
+                console.error(`[sent_debug] chat=${chatId} link=${link.id} sent_n=${insertedTotal}`);
+              }
+            }
+            sentSomething = true;
+          }
+
+          batchBuffers.delete(key);
+        }
+      }
+
+      if (sentSomething) {
+        const newDaily = Math.min(maxDaily, dailyCount + insertedTotal);
+
+        await notifyPool.query(
+          `
+          UPDATE chat_notifications
+          SET last_notified_at = NOW(),
+              daily_count = $1,
+              daily_count_date = $2
+          WHERE chat_id = $3 AND user_id = $4
+          `,
+          [newDaily, todayStr, chatId, userId]
+        );
+      } else {
+        await notifyPool.query(
+          `
+          UPDATE chat_notifications
+          SET daily_count = $1,
+              daily_count_date = $2
+          WHERE chat_id = $3 AND user_id = $4
+          `,
+          [dailyCount, todayStr, chatId, userId]
+        );
+      }
+    }
+  } catch (err) {
+    console.error("Błąd notifyChatsForLink:", err);
+  }
+}
+
+// ---------- Scraping OLX ----------
+
+async function scrapeOlx(url) {
+  const launchOpts = {
+    args: ["--no-sandbox", "--disable-dev-shm-usage"],
+  };
+  if (PROXY) launchOpts.proxy = PROXY;
+
+  const browser = await chromium.launch(launchOpts);
   const context = await browser.newContext({
     locale: "pl-PL",
     timezoneId: "Europe/Warsaw",
     userAgent:
       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   });
-  context.setDefaultTimeout(45000);
-  context.setDefaultNavigationTimeout(45000);
-  const page = await context.newPage();
 
-  // ---- OLX CloudFront backoff (per-page goto override) ----
-  const __origGoto = page.goto.bind(page);
-  page.goto = async (u, opts) => {
-    const fixed = __fixOlxUrl(u);
-    const s = String(fixed || "");
-    if (s.includes("olx.pl")) {
-      const now = Date.now();
-      const backoffMs = parseInt(process.env.OLX_BACKOFF_MS || "600000", 10);
-      const until = globalThis.__olxBackoffUntil || 0;
-      if (now < until) throw new Error("OLX_BACKOFF_ACTIVE");
+let page = await context.newPage();
 
-      const res = await __origGoto(fixed, opts);
+const setupPage = async (p) => {
 
-      const title = String(await page.title().catch(() => "") || "");
-      if (title.includes("request could not be satisfied")) {
-        globalThis.__olxBackoffUntil = Date.now() + backoffMs;
-        throw new Error("OLX_CLOUDFRONT_BLOCK");
-      }
-      return res;
-    }
-    return __origGoto(fixed, opts);
-  };
-  // ---- OLX CloudFront backoff END ----
+// Przyspieszenie: nie ładuj ciężkich zasobów
+await p.route(/.*/i, (route) => {
+  const t = route.request().resourceType();
+  if (t === "image" || t === "media" || t === "font") return route.abort();
+  return route.continue();
+});
 
-// __FYD_BLOCK_ASSETS_V1
-try {
-  await page.route("**/*", (route) => {
-    const req = route.request();
-    const t = req.resourceType();
-        try { const h = new URL(req.url()).hostname.toLowerCase(); if (__FYD_BLOCK_HOST_RE.test(h)) return route.abort(); } catch {}
-    if (t === "image" || t === "media" || t === "font") return route.abort();
-    return route.continue();
-  });
-} catch {}
-try {
-  await page.route("**/*", (route) => {
-    const t = route.request().resourceType();
-        try { const h = new URL(route.request().url()).hostname.toLowerCase(); if (__FYD_BLOCK_HOST_RE.test(h)) return route.abort(); } catch {}
-    if (t === "image" || t === "media" || t === "font") return route.abort();
-    return route.continue();
-  });
-} catch {}
-      // await __fydBlockHeavyAssets(page); // DISABLED: breaks OLX dynamic loading
+  p.setDefaultNavigationTimeout(60000);
+  p.setDefaultTimeout(60000);
+};
+
   try {
-    await page.route(/.*/i, (route) => {
-      const t = route.request().resourceType();
-        try { const h = new URL(route.request().url()).hostname.toLowerCase(); if (__FYD_BLOCK_HOST_RE.test(h)) return route.abort(); } catch {}
-      if (t === "image" || t === "media" || t === "font") return route.abort();
-      // obrazki zostawiamy "jak jest" (często atrybuty są i bez pobrania, ale nie blokujemy na siłę)
-      return route.continue();
+await setupPage(page);
+
+// Retry na OLX (czasem siada / muli)
+let lastErr = null;
+
+for (let attempt = 1; attempt <= 3; attempt++) {
+  try {
+    // NAJWAŻNIEJSZE: NIE używamy networkidle
+    await page.goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: 60000,
     });
 
-    await page.goto(__fixOlxUrl(url), { waitUntil: "domcontentloaded", timeout: 45000 });
-    await page.waitForTimeout(2200);
+    // Poczekaj aż pojawią się karty
+    await page.waitForSelector('div[data-cy="l-card"]', { timeout: 25000 });
 
-    await page.waitForSelector('main a[href^="/items/"]', { timeout: 12000 }).catch(() => null);
+    // krótki oddech na domknięcie DOM
+    await page.waitForTimeout(800);
 
-    const raw = await page.$$eval('main a[href^="/items/"]', (anchors) => {
-      const seen = new Set();
+    lastErr = null;
+    break;
+  } catch (e) {
+    lastErr = e;
+    console.log(`OLX goto attempt ${attempt}/3 failed: ${e?.message || e}`);
+
+    // Jeśli strona się wysypała / zamknęła – twórz nową i jedziemy dalej
+    if (page.isClosed()) {
+      page = await context.newPage();
+      await setupPage(page);
+    }
+
+    // UWAGA: nie używamy page.waitForTimeout w catch (bo page może być zamknięta)
+    await new Promise((r) => setTimeout(r, 1500 * attempt));
+  }
+}
+
+if (lastErr) throw lastErr;
+
+    const rawItems = await page.$$eval('div[data-cy="l-card"]', (cards) => {
       const results = [];
 
-      function extractPhotoUrl(rootEl) {
-        let el = rootEl;
-        for (let depth = 0; depth < 6 && el; depth++) {
-          const img = el.querySelector("img");
-          if (img) {
-            const srcset = img.getAttribute("srcset") || "";
-            const primaryFromSrcset = srcset.split(" ")[0] || null;
-            return (
-              img.src ||
-              img.getAttribute("src") ||
-              img.getAttribute("data-src") ||
-              primaryFromSrcset
-            );
+      for (const card of cards) {
+        const linkEl = card.querySelector(
+          'a[href*="/oferta/"], a[href*="/d/oferta/"]'
+        );
+        if (!linkEl) continue;
+
+                const url = (() => {
+          try {
+            const u = new URL(linkEl.href);
+            u.hash = "";
+            u.search = "";
+            u.pathname = u.pathname.replace(/^\/d\/oferta\//, "/oferta/");
+            return u.toString();
+          } catch (e) {
+            return (linkEl.href || "").split("#")[0].split("?")[0].replace("/d/oferta/", "/oferta/");
           }
-          el = el.parentElement;
+        })();
+
+        let title = "";
+
+        const titleEl =
+          card.querySelector('[data-cy="ad-card-title"]') ||
+          card.querySelector('[data-testid="ad-title"]') ||
+          linkEl.querySelector("h6") ||
+          linkEl.querySelector("h3") ||
+          card.querySelector("h6") ||
+          card.querySelector("h3");
+
+        if (titleEl) title = (titleEl.innerText || titleEl.textContent || "").trim();
+        if (!title && linkEl.getAttribute("title"))
+          title = linkEl.getAttribute("title").trim();
+        if (!title) title = (linkEl.innerText || linkEl.textContent || "").trim();
+
+        let priceText = "";
+        const priceEl =
+          card.querySelector('[data-testid="ad-price"]') ||
+          card.querySelector('[data-cy="ad-card-price"]');
+        if (priceEl) priceText = (priceEl.innerText || priceEl.textContent || "").trim();
+
+        // UWAGA: obrazy blokujemy routem, więc photoUrl często będzie null (to OK)
+        const img = card.querySelector("img");
+        let photoUrl = null;
+        if (img) {
+          photoUrl =
+            img.src ||
+            img.getAttribute("src") ||
+            img.getAttribute("data-src") ||
+            (img.getAttribute("srcset") || "").split(" ")[0] ||
+            null;
         }
-        return null;
+
+        const text = card.innerText || card.textContent || "";
+        const hasOlxDelivery = /Przesyłka OLX/i.test(text);
+
+        results.push({
+          url,
+          title,
+          rawPrice: priceText,
+          photoUrl,
+          hasOlxDelivery,
+        });
       }
 
-      for (const a of anchors) {
-        const href = a.href;
-        if (!href || !href.includes("/items/")) continue;
-        if (seen.has(href)) continue;
-        seen.add(href);
-
-        const titleAttr = a.getAttribute("title") || "";
-        const text = a.textContent ? a.textContent.trim() : "";
-        const photoUrl = extractPhotoUrl(a);
-
-        results.push({ url: href, titleAttr, text, photoUrl });
-      }
       return results;
-    }).catch(() => []);
+    });
 
-    const mappedItems = (raw || [])
-      .map((it) => {
-        const meta = parseVintedMeta(it.titleAttr, it.text);
-        const rawPrice = meta.rawPriceFromTitle || "";
-        const { price, currency } = parsePrice(rawPrice);
+    if (rawItems[0]) logDebug("OLX first item debug:", rawItems[0]);
 
-        const itemKey = normalizeKey(it.url);
-        const vintedId = getVintedItemIdFromUrl(itemKey);
+    const items = rawItems.map((it) => {
+      let finalTitle = it.title || "";
+      if (!finalTitle || /^wyróżnione$/i.test(finalTitle)) {
+        const fromUrl = deriveOlxTitleFromUrl(it.url);
+        if (fromUrl) finalTitle = fromUrl;
+      }
 
-        return {
-          url: it.url,
-          title: meta.title || it.text || "",
-          price,
-          currency: currency || fallbackCurrency,
-          brand: meta.brand,
-          size: meta.size,
-          condition: meta.condition,
-          photoUrl: it.photoUrl ? String(it.photoUrl) : null,
-          itemKey,
-          item_key: itemKey,
-          vintedId,
-        };
-      })
-      .filter(Boolean);
+      const { price, currency } = parsePrice(it.rawPrice);
+      const url = normalizeOlxUrl(it.url);
+      const itemKey = normalizeKey(url);
 
-    return __fydFixVintedItems(mappedItems);
+      return {
+        url,
+        title: finalTitle,
+        price,
+        currency,
+        brand: null,
+        size: null,
+        condition: null,
+        photoUrl: it.photoUrl,
+        hasOlxDelivery: it.hasOlxDelivery,
+        buyUrl: it.hasOlxDelivery ? it.url : null,
+        itemKey,
+        item_key: itemKey,
+      };
+    });
+    return items;
   } finally {
     await page.close().catch(() => null);
     await context.close().catch(() => null);
@@ -2744,15 +1343,42 @@ try {
   }
 }
 
+// ---------- Scraping Vinted ----------
+
+function pickArrayFromApi(data) {
+  if (!data || typeof data !== "object") return [];
+  if (Array.isArray(data.items)) return data.items;
+  if (Array.isArray(data.catalog_items)) return data.catalog_items;
+  if (Array.isArray(data?.data?.items)) return data.data.items;
+  if (Array.isArray(data?.data?.catalog_items)) return data.data.catalog_items;
+  return [];
+}
+
 async function scrapeVinted(url) {
+  let q = "";
   let origin = "";
-  try { origin = new URL(url).origin; } catch {}
+  try {
+    const u = new URL(url);
+    q = u.searchParams.get("search_text") || "";
+    origin = u.origin;
+  } catch {
+    // ignore
+  }
 
   const fallbackCurrency = getVintedFallbackCurrency(url);
 
-  // 1) API (pw request)
+  // 1) API Vinted przez Playwright request
   try {
     const apiUrl = buildVintedApiUrl(url);
+    logDebug(`Vinted API url: ${apiUrl}`);
+
+    if (!origin) {
+      try {
+        origin = new URL(apiUrl).origin;
+      } catch {
+        // ignore
+      }
+    }
 
     const api = await request.newContext({
       proxy: PROXY || undefined,
@@ -2765,10 +1391,27 @@ async function scrapeVinted(url) {
     });
 
     try {
+      // Warm-up: złap anon cookies / token
       if (origin) {
         await api.get("/", {
-          headers: { accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+          headers: {
+            accept:
+              "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          },
         });
+      }
+
+      // Drugi warm-up: wejście na realny /catalog
+      try {
+        await api.get(url, {
+          headers: {
+            accept:
+              "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            referer: origin ? origin + "/" : undefined,
+          },
+        });
+      } catch {
+        // ignore
       }
 
       const res = await api.get(apiUrl, {
@@ -2780,10 +1423,18 @@ async function scrapeVinted(url) {
       });
 
       const txt = await res.text().catch(() => "");
-      if (!res.ok()) throw new Error(`HTTP_${res.status()}`);
+      if (!res.ok()) {
+        logDebug(`Vinted API HTTP ${res.status()}: ${txt.slice(0, 180)}`);
+        throw new Error(`HTTP_${res.status()}`);
+      }
 
       let apiData = null;
-      try { apiData = JSON.parse(txt); } catch { throw new Error("JSON_PARSE"); }
+      try {
+        apiData = JSON.parse(txt);
+      } catch {
+        logDebug("Vinted API JSON_PARSE error");
+        throw new Error("JSON_PARSE");
+      }
 
       const arr = pickArrayFromApi(apiData);
       if (arr && arr.length) {
@@ -2809,15 +1460,30 @@ async function scrapeVinted(url) {
 
             if (!urlAbs) return null;
 
-            const title = it?.title || it?.name || it?.description || it?.brand_title || "";
+            const title =
+              it?.title ||
+              it?.name ||
+              it?.description ||
+              it?.brand_title ||
+              "";
 
-            const priceAmount = it?.price?.amount ?? it?.price?.value ?? it?.price ?? it?.total_item_price?.amount ?? null;
+            const priceAmount =
+              it?.price?.amount ??
+              it?.price?.value ??
+              it?.price ??
+              it?.total_item_price?.amount ??
+              null;
+
             const price =
               priceAmount != null && String(priceAmount).trim() !== ""
                 ? Number(String(priceAmount).replace(",", "."))
                 : null;
 
-            const currency = it?.price?.currency_code || it?.currency || fallbackCurrency || null;
+            const currency =
+              it?.price?.currency_code ||
+              it?.currency ||
+              fallbackCurrency ||
+              null;
 
             const photoUrl =
               it?.photo?.url ||
@@ -2826,9 +1492,17 @@ async function scrapeVinted(url) {
               (Array.isArray(it?.photos) && it.photos[0]?.url) ||
               null;
 
-            const brand = it?.brand_title || it?.brand || it?.brand_name || null;
-            const size = it?.size_title || it?.size || it?.size_name || null;
-            const condition = it?.status_title || it?.status || it?.item_condition || null;
+            const brand =
+              it?.brand_title || it?.brand || it?.brand_name || null;
+
+            const size =
+              it?.size_title || it?.size || it?.size_name || null;
+
+            const condition =
+              it?.status_title ||
+              it?.status ||
+              it?.item_condition ||
+              null;
 
             const itemKey = normalizeKey(urlAbs);
             const vintedId = getVintedItemIdFromUrl(itemKey) || id || null;
@@ -2847,32 +1521,41 @@ async function scrapeVinted(url) {
               vintedId: typeof vintedId === "number" ? vintedId : null,
             };
           })
-          .filter(Boolean);
+          .filter(Boolean)
+          .filter((it) => {
+            try {
+              const u = new URL(it.itemKey || it.url);
+              const h = (u.hostname || "").toLowerCase();
+              return h.includes("vinted.") && u.pathname.startsWith("/items/");
+            } catch {
+              return false;
+            }
+          });
 
-        return __fydFixVintedItems(mapped);
+        logDebug(
+          `Vinted(API pw request): items=${mapped.length}, q="${q}", currency="${
+            fallbackCurrency || ""
+          }"`
+        );
+        return mapped;
       }
+
+      logDebug(`Vinted(API pw request): 0 items, q="${q}"`);
     } finally {
       await api.dispose().catch(() => null);
     }
   } catch (e) {
-    logDebug("Vinted API failed -> fallback DOM:", e?.message || e);
-    // fallback playwright catalog (rich DOM)
-    try {
-      const items = await __fydVintedCatalogViaPlaywright(url);
-      console.log(`[vinted-pw] fallback items=${items.length} url=${url}`);
-      return items;
-    } catch (e2) {
-      console.log("[vinted-pw] fallback FAIL:", (e2 && e2.message) ? e2.message : e2);
-    }
+    logDebug("Vinted API (pw request) failed -> fallback DOM:", e?.message || e);
   }
 
-  // 2) DOM fallback (klasyczny)
-  const launchOpts = { args: ["--no-sandbox", "--disable-dev-shm-usage"] };
-  if (__fydProxyEnabledBool() && __fydProxyOpts) launchOpts.proxy = __fydProxyOpts;
-
-  await __fydChromiumGuard("pw");
+  // 2) Fallback: DOM przez Chromium
+  const launchOpts = {
+    args: ["--no-sandbox", "--disable-dev-shm-usage"],
+  };
+  if (PROXY) launchOpts.proxy = PROXY;
 
   const browser = await chromium.launch(launchOpts);
+
   const context = await browser.newContext({
     locale: "pl-PL",
     timezoneId: "Europe/Warsaw",
@@ -2880,48 +1563,40 @@ async function scrapeVinted(url) {
       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
   });
 
-  context.setDefaultTimeout(45000);
-  context.setDefaultNavigationTimeout(45000);
   const page = await context.newPage();
 
-  // ---- OLX CloudFront backoff (per-page goto override) ----
-  const __origGoto = page.goto.bind(page);
-  page.goto = async (u, opts) => {
-    const fixed = __fixOlxUrl(u);
-    const s = String(fixed || "");
-    if (s.includes("olx.pl")) {
-      const now = Date.now();
-      const backoffMs = parseInt(process.env.OLX_BACKOFF_MS || "600000", 10);
-      const until = globalThis.__olxBackoffUntil || 0;
-      if (now < until) throw new Error("OLX_BACKOFF_ACTIVE");
-
-      const res = await __origGoto(fixed, opts);
-
-      const title = String(await page.title().catch(() => "") || "");
-      if (title.includes("request could not be satisfied")) {
-        globalThis.__olxBackoffUntil = Date.now() + backoffMs;
-        throw new Error("OLX_CLOUDFRONT_BLOCK");
-      }
-      return res;
-    }
-    return __origGoto(fixed, opts);
-  };
-  // ---- OLX CloudFront backoff END ----
-
-try {
-  await page.route("**/*", (route) => {
-    const t = route.request().resourceType();
-        try { const h = new URL(route.request().url()).hostname.toLowerCase(); if (__FYD_BLOCK_HOST_RE.test(h)) return route.abort(); } catch {}
-    if (t === "image" || t === "media" || t === "font") return route.abort();
-    return route.continue();
-  });
-} catch {}
-      // await __fydBlockHeavyAssets(page); // DISABLED: breaks OLX dynamic loading
   try {
-    await page.goto(__fixOlxUrl(url), { waitUntil: "domcontentloaded", timeout: 45000 });
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
     await page.waitForTimeout(2000);
 
-    await page.waitForSelector('main a[href^="/items/"]', { timeout: 12000 }).catch(() => null);
+    // jeśli Vinted zrzuci na /session-refresh, wróć do ref_url
+    try {
+      const cur = page.url();
+      if (cur.includes("/session-refresh")) {
+        const u = new URL(cur);
+        const ref = u.searchParams.get("ref_url");
+        if (ref) {
+          const decoded = decodeURIComponent(ref);
+          const u2 = new URL(decoded, `${u.protocol}//${u.host}`);
+          await page.goto(u2.toString(), {
+            waitUntil: "domcontentloaded",
+            timeout: 45000,
+          });
+          await page.waitForTimeout(3000);
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    await page
+      .waitForSelector(
+        '[data-testid="feed-container"] [data-testid="product-card"], main a[href^="/items/"]',
+        { timeout: 12000 }
+      )
+      .catch(() => null);
+
+    await page.waitForTimeout(1500);
 
     const rawItems = await page
       .$$eval('main a[href^="/items/"]', (anchors) => {
@@ -2957,23 +1632,32 @@ try {
           const text = a.textContent ? a.textContent.trim() : "";
           const photoUrl = extractPhotoUrl(a);
 
-          results.push({ url: href, titleAttr, text, rawPrice: "", photoUrl });
+          results.push({
+            url: href,
+            titleAttr,
+            text,
+            rawPrice: "",
+            photoUrl,
+          });
         }
 
         return results;
       })
       .catch(() => []);
 
+    logDebug(`Vinted(DOM) HTML: count=${rawItems.length}, q="${q}"`);
+
     const mappedItems = (rawItems || [])
       .map((it) => {
         const meta = parseVintedMeta(it.titleAttr, it.text);
         const rawPrice = meta.rawPriceFromTitle || it.rawPrice;
         const { price, currency } = parsePrice(rawPrice);
-        const itemKey = normalizeKey(it.url);
-        const vintedId = getVintedItemIdFromUrl(itemKey);
+        const itemKey = normalizeKey(url);
+        const vintedId =
+          getVintedItemIdFromUrl(itemKey) || getVintedItemIdFromUrl(it.url);
 
         return {
-          url: it.url,
+          url,
           title: meta.title || it.text || "",
           price,
           currency: currency || fallbackCurrency,
@@ -2986,95 +1670,42 @@ try {
           vintedId,
         };
       })
-      .filter(Boolean);
+      .filter((it) => {
+        try {
+          const u = new URL(it.itemKey || it.url);
+          const h = (u.hostname || "").toLowerCase();
+          return h.includes("vinted.") && u.pathname.startsWith("/items/");
+        } catch {
+          return false;
+        }
+      });
 
-    return __fydFixVintedItems(mappedItems);
+    return mappedItems;
   } finally {
-    try { if (page) await page.close().catch(() => null); } catch {}
     await context.close().catch(() => null);
     await browser.close().catch(() => null);
   }
 }
 
-// ---------- Filtrowanie ----------
-function matchFilters(item, filters = {}) {
-  if (!filters || Object.keys(filters).length === 0) return true;
-
-  const price = typeof item.price === "number" ? item.price : null;
-
-  if (filters.minPrice != null && price != null && price < filters.minPrice) return false;
-  if (filters.maxPrice != null && price != null && price > filters.maxPrice) return false;
-
-  if (Array.isArray(filters.brand) && filters.brand.length) {
-    const brandLower = (item.brand || "").toLowerCase();
-    const ok = filters.brand.some((b) => brandLower.includes(String(b).toLowerCase()));
-    if (!ok) return false;
-  }
-
-  if (Array.isArray(filters.sizes) && filters.sizes.length) {
-    const sizeLower = (item.size || "").toLowerCase();
-    const ok = filters.sizes.some((s) => sizeLower === String(s).toLowerCase());
-    if (!ok) return false;
-  }
-
-  if (Array.isArray(filters.conditions) && filters.conditions.length) {
-    const condLower = (item.condition || "").toLowerCase();
-    const ok = filters.conditions.some((c) => condLower.includes(String(c).toLowerCase()));
-    if (!ok) return false;
-  }
-
-  return true;
-}
+// ---------- Główna logika workera ----------
 
 function safeParseFilters(raw) {
   if (!raw) return {};
   if (typeof raw === "object") return raw;
   if (typeof raw === "string") {
-    try { return JSON.parse(raw); } catch { return {}; }
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return {};
+    }
   }
   return {};
 }
 
-
-
-// ---- FYD_URL_PRICE_BOUNDS_V1 ----
-function __fydGetUrlPriceBounds(linkUrl) {
-  let priceFrom = null;
-  let priceTo = null;
-  try {
-    const u = new URL(String(linkUrl || ""));
-    const sp = u.searchParams;
-    const pf = sp.get("price_from") || sp.get("search[filter_float_price:from]");
-    const pt = sp.get("price_to")   || sp.get("search[filter_float_price:to]");
-    if (pf !== null && pf !== "") {
-      const n = Number(pf);
-      if (Number.isFinite(n)) priceFrom = n;
-    }
-    if (pt !== null && pt !== "") {
-      const n = Number(pt);
-      if (Number.isFinite(n)) priceTo = n;
-    }
-  } catch {}
-  return { priceFrom, priceTo };
-}
-
-function __fydApplyUrlPriceBounds(items, pb) {
-  const arr = Array.isArray(items) ? items : [];
-  const priceFrom = (pb && pb.priceFrom != null) ? pb.priceFrom : null;
-  const priceTo   = (pb && pb.priceTo   != null) ? pb.priceTo   : null;
-  if (priceFrom == null && priceTo == null) return arr; // no bounds
-  return arr.filter((it) => {
-    const p = (it && typeof it.price === "number" && Number.isFinite(it.price)) ? it.price : null;
-    if (priceFrom != null && p != null && p < priceFrom) return false;
-    if (priceTo != null && p != null && p > priceTo) return false;
-    return true;
-  });
-}
-// ---- FYD_URL_PRICE_BOUNDS_V1 END ----
-
 function sortItemsForNotify(source, items) {
   const src = (source || "").toLowerCase();
   if (src === "vinted") {
+    // newest-first po vintedId jeśli mamy
     return [...(items || [])].sort((a, b) => {
       const ai = typeof a.vintedId === "number" ? a.vintedId : -1;
       const bi = typeof b.vintedId === "number" ? b.vintedId : -1;
@@ -3086,143 +1717,183 @@ function sortItemsForNotify(source, items) {
 
 async function processLink(link) {
   const source = (link.source || detectSource(link.url) || "").toLowerCase();
-  if (!source) return;
 
-  const tgUserId = link.telegram_user_id || null;
+  const tgUserId = link.telegram_user_id || link.telegramUserId || null;
   const limits = tgUserId ? await getUserLimits(tgUserId) : null;
 
 
-  const __pb = __fydGetUrlPriceBounds(link.url);
   if (limits?.sources_allowed && Array.isArray(limits.sources_allowed) && !limits.sources_allowed.includes(source)) {
-    console.log(`[link ${link.id}] SOURCE_NOT_ALLOWED_BY_PLAN source=${source}`);
+    console.log(`[link ${link.id}] SOURCE_NOT_ALLOWED_BY_PLAN source=${source} allowed=${JSON.stringify(limits.sources_allowed)}`);
+    return;
+  }
+  if (!source) {
+    logDebug(`Worker: unknown source for link ${link.id}, url=${link.url}`);
     return;
   }
 
   console.log(`Worker: checking ${link.url}`);
 
   let scraped = [];
-  if (source === "olx") {
-    let u = String(link.url || "");
-    try {
-      const U = new URL(u);
-      const m = U.pathname.match(/\/(?:d\/)?oferty\/q-([^\/]+)\//i);
-      if (m && !U.searchParams.get("q")) {
-        const term = decodeURIComponent(m[1]).replace(/-/g, " ").trim();
-        if (term) U.searchParams.set("q", term);
-      }
-      u = U.toString();
-    } catch {}
-    scraped = await scrapeOlx(u);
-  }
+  if (source === "olx") scraped = await scrapeOlx(link.url);
   else if (source === "vinted") scraped = await scrapeVinted(link.url);
-  else return;
-
-  // twarde ujednolicenie Vinted itemów już na wejściu
-  if (source === "vinted") scraped = __fydFixVintedItems(scraped);
-
+  else {
+    console.log(`Worker: unsupported source=${source} for link ${link.id}`);
+    return;
+  }
   const lastKey = cleanKey(
     source === "olx"
-      ? normalizeOlxUrl(String(link.last_key ?? ""))
-      : String(link.last_key ?? "")
+      ? normalizeOlxUrl(String(link.last_key ?? link.lastKey ?? ""))
+      : String(link.last_key ?? link.lastKey ?? "")
+  );
+  const hasLastKey = lastKey !== null;
+
+  console.log(
+    `[link ${link.id}] source=${source} scraped=${scraped.length} lastKey=${
+      hasLastKey ? "YES" : "NO"
+    } lastKeyVal=${lastKey ?? "(null)"}`
   );
 
-  if (source === "vinted") {
-    console.log("[vinted] link_id=" + link.id + " scraped=" + ((scraped||[]).length) + " lastKey=" + (lastKey ? "set" : "(empty)"));
-  }
-
   const cfg = getSourceConfig(source);
-  const maxPerLoop = Number(limits?.max_items_per_link_per_loop || cfg.maxPerLoop);
+  const planLimit = Number(limits?.max_items_per_link_per_loop || cfg.maxPerLoop);
+  const linkLimit = link.max_items_per_loop != null ? Number(link.max_items_per_loop) : null;
+  
+  // Use link-specific limit if set, otherwise use plan limit
+  const maxPerLoop = linkLimit !== null && Number.isFinite(linkLimit) && linkLimit > 0 
+    ? linkLimit 
+    : planLimit;
+    
   const minBatchItems = cfg.minBatchItems;
 
   const filters = safeParseFilters(link.filters);
   const filtered = (scraped || []).filter((it) => matchFilters(it, filters));
-  if (source === "vinted") {
-    console.log("[vinted] link_id=" + link.id + " filtered=" + ((filtered||[]).length) + " (after matchFilters)");
-  }
-  if (!filtered.length) return;
 
-  let orderedAll = source === "vinted" ? sortItemsForNotify(source, filtered) : filtered;
-  orderedAll = __fydApplyUrlPriceBounds(orderedAll, __pb);
-  if (!orderedAll.length) return;
-  // baseline: nowy link -> ustaw last_key i nie wysyłaj
-  if (!lastKey) {
-    const newestKey = getItemKey(orderedAll[0]);
-    if (source === "vinted") console.log("[vinted] link_id=" + link.id + " baseline_set_lastKey (no notify) newestKey=" + (newestKey ? "yes" : "no"));
-    if (newestKey) await updateLastKey(link.id, __fydNormalizeItemKeyFromUrl(newestKey));
+  console.log(
+    `[link ${link.id}] filtered=${filtered.length} filtersKeys=${
+      Object.keys(filters || {}).length
+    }`
+  );
+
+  if (!filtered.length) {
+    logDebug(`Worker: no items after filters for link ${link.id}`);
     return;
   }
 
-  const { fresh: freshByLastKey, found } = takeNewItemsUntilLastKey(orderedAll, lastKey);
+  // porządek newest-first
+  const orderedAll =
+    source === "vinted" ? sortItemsForNotify(source, filtered) : filtered;
 
+  // ======= BASELINE: nowy link -> ustaw last_key i nic nie zapisuj/nie wysyłaj
+  if (!lastKey) {
+    const newestKey = getItemKey(orderedAll[0]);
+    if (newestKey) {
+      await updateLastKey(link.id, newestKey);
+      console.log(
+        `[baseline] link ${link.id} last_key ustawiony na: ${newestKey}`
+      );
+    } else {
+      console.log(
+        `[baseline] link ${link.id} brak itemKey do ustawienia last_key (pusto po scrapie/filtrach)`
+      );
+    }
+    return;
+  }
+
+  // ======= normalnie: bierz tylko "nowsze niż last_key"
+  const { fresh: freshByLastKey, found } = takeNewItemsUntilLastKey(
+    orderedAll,
+    lastKey
+  );
+  // Jeśli last_key nie znaleziony na liście:
+  // najczęściej znaczy, że last_key wypadł poza 1. stronę (dużo nowych ogłoszeń).
+  // Zamiast milczeć, robimy 'catch-up' na podstawie bieżącej strony + seen-check.
   if (!found) {
     const newestKey = getItemKey(orderedAll[0]);
 
     const keysToCheck = orderedAll.map(getItemKey).filter(Boolean);
-    const seenSet = await getSeenItemKeys(link.id, (keysToCheck || []).map(__fydNormalizeItemKeyFromUrl));
+    const seenSet = await getSeenItemKeys(link.id, keysToCheck);
 
-    let freshNotSeen = orderedAll.filter((it) => {
+    const freshNotSeen = orderedAll.filter((it) => {
       const k = getItemKey(it);
       return k && !seenSet.has(k);
     });
 
     if (!freshNotSeen.length) {
-      if (newestKey && (__fydNormalizeKey(newestKey) !== __fydNormalizeKey(lastKey))) await updateLastKey(link.id, __fydNormalizeItemKeyFromUrl(newestKey));
+      if (newestKey && newestKey !== lastKey) await updateLastKey(link.id, newestKey);
+      logDebug(
+        `[resync] link ${link.id} last_key nie znaleziony, ale brak nowych (same seen) -> ustawiam na: ${newestKey || "(null)"}`
+      );
       return;
     }
 
-    if (source === "vinted") freshNotSeen = __fydFixVintedItems(freshNotSeen);
-
-    const __insN = await insertLinkItems(link.id, __fydFilterAndNormalizeItems(link.url, freshNotSeen));
-    console.log(`[insert] link_id=${link.id} +${__insN} (candidates=${freshNotSeen.length})`);
+    await insertLinkItems(link.id, freshNotSeen);
 
     const toSend = freshNotSeen.slice(0, maxPerLoop);
     const skipped = freshNotSeen.length - toSend.length;
 
-    await notifyChatsForLink(link, __fydNormalizeItems(toSend), skipped, { minBatchItems });
+    await notifyChatsForLink(link, toSend, skipped, { minBatchItems });
 
-    if (newestKey) await updateLastKey(link.id, __fydNormalizeItemKeyFromUrl(newestKey));
+    if (newestKey) await updateLastKey(link.id, newestKey);
 
     const keep = Number(limits?.history_keep_per_link || HISTORY_KEEP_PER_LINK);
     if (Number.isFinite(keep) && keep > 0) await pruneLinkItems(link.id, keep);
+
+    logDebug(
+      `[catchup] link ${link.id} last_key wypadł poza stronę -> wysłano=${toSend.length} pominięto=${skipped}`
+    );
     return;
   }
 
   if (!freshByLastKey.length) {
     const newestKey = getItemKey(orderedAll[0]);
-    if (newestKey && (__fydNormalizeKey(newestKey) !== __fydNormalizeKey(lastKey))) await updateLastKey(link.id, __fydNormalizeItemKeyFromUrl(newestKey));
+    if (newestKey && newestKey !== lastKey) {
+      await updateLastKey(link.id, newestKey);
+    }
+    logDebug(`Worker: no fresh items before last_key for link ${link.id}`);
     return;
   }
 
+  // ======= seen-check TYLKO dla tych świeżych
   const keysToCheck = freshByLastKey.map(getItemKey).filter(Boolean);
-  const seenSet = await getSeenItemKeys(link.id, (keysToCheck || []).map(__fydNormalizeItemKeyFromUrl));
+  const seenSet = await getSeenItemKeys(link.id, keysToCheck);
 
-  let freshNotSeen = freshByLastKey.filter((it) => {
+  const freshNotSeen = freshByLastKey.filter((it) => {
     const k = getItemKey(it);
     return k && !seenSet.has(k);
   });
 
   if (!freshNotSeen.length) {
     const newestKey = getItemKey(orderedAll[0]);
-    if (newestKey && (__fydNormalizeKey(newestKey) !== __fydNormalizeKey(lastKey))) await updateLastKey(link.id, __fydNormalizeItemKeyFromUrl(newestKey));
+    if (newestKey && newestKey !== lastKey) {
+      await updateLastKey(link.id, newestKey);
+    }
+    logDebug(
+      `Worker: fresh items existed but all already seen for link ${link.id}`
+    );
     return;
   }
 
-  if (source === "vinted") freshNotSeen = __fydFixVintedItems(freshNotSeen);
+  // zapisujemy do DB wszystkie świeże nie-widziane
+  await insertLinkItems(link.id, freshNotSeen);
 
-  const __insN2 = await insertLinkItems(link.id, __fydFilterAndNormalizeItems(link.url, freshNotSeen));
-  console.log(`[insert] link_id=${link.id} +${__insN2} (candidates=${freshNotSeen.length})`);
-
+  // wysyłka limitowana
   const toSend = freshNotSeen.slice(0, maxPerLoop);
   const skipped = freshNotSeen.length - toSend.length;
 
-  const __fydToSend = __fydFilterAndNormalizeItems(link.url, toSend);
-    if (__fydToSend.length) await notifyChatsForLink(link, __fydNormalizeItems(__fydToSend), skipped, { minBatchItems });
+  if (toSend.length) {
+    await notifyChatsForLink(link, toSend, skipped, { minBatchItems });
+  }
 
+  // przesuwamy last_key na aktualnie najnowszy z listingu
   const newestKey = getItemKey(orderedAll[0]);
-  if (newestKey) await updateLastKey(link.id, __fydNormalizeItemKeyFromUrl(newestKey));
+  if (newestKey) {
+    await updateLastKey(link.id, newestKey);
+  }
 
+  // przytnij historię
   const keep = Number(limits?.history_keep_per_link || HISTORY_KEEP_PER_LINK);
-  if (Number.isFinite(keep) && keep > 0) await pruneLinkItems(link.id, keep);
+  if (Number.isFinite(keep) && keep > 0) {
+    await pruneLinkItems(link.id, keep);
+  }
 }
 
 async function loopOnce() {
@@ -3230,26 +1901,37 @@ async function loopOnce() {
   const links = await getLinksForWorker();
   console.log(`Worker: found links: ${links.length}`);
 
-  // grupujemy per telegram_user_id (żeby cap był per user)
+  // grupujemy per telegram_user_id
   const byUser = new Map(); // tgId(str) -> links[]
   for (const link of links) {
-    const tgId = link.telegram_user_id ? String(link.telegram_user_id) : "__no_tg__";
-    if (!byUser.has(tgId)) byUser.set(tgId, []);
-    byUser.get(tgId).push(link);
+    const tgId = link.telegram_user_id || link.telegramUserId || null;
+    const key = tgId ? String(tgId) : "__no_tg__";
+    if (!byUser.has(key)) byUser.set(key, []);
+    byUser.get(key).push(link);
   }
 
   for (const [tgId, userLinks] of byUser.entries()) {
-    const sorted = [...userLinks].sort((a, b) => Number(a.id) - Number(b.id));
-
-    let toProcess = sorted;
-
-    if (tgId !== "__no_tg__") {
-      const lim = await getUserLimits(tgId);
-      const cap = Number(lim?.links_limit_total ?? lim?.links_limit ?? 0);
-      if (cap > 0) toProcess = sorted.slice(0, cap);
-      if (cap > 0 && sorted.length > cap) {
-        console.log(`[user ${tgId}] cap=${cap} active_links=${sorted.length} -> processing=${toProcess.length}`);
+    // legacy safety – jakby brak tgId, to lecimy bez limitu
+    if (tgId === "__no_tg__") {
+      for (const link of userLinks) {
+        try {
+          await processLink(link);
+        } catch (err) {
+          console.error(`Worker: error for link ${link.id}`, err);
+        }
       }
+      continue;
+    }
+
+    // limit planu: ile linków usera maks obsługujemy (bez względu na active/inactive w DB – tu i tak mamy tylko active)
+    const lim = await getUserLimits(tgId);
+    const cap = Number(lim?.links_limit || 0);
+
+    const sorted = [...userLinks].sort((a, b) => Number(a.id) - Number(b.id));
+    const toProcess = (cap > 0) ? sorted.slice(0, cap) : sorted;
+
+    if (cap > 0 && sorted.length > cap) {
+      console.log(`[user ${tgId}] worker cap links_limit=${cap} active_links_seen=${sorted.length} -> processing=${toProcess.length}`);
     }
 
     for (const link of toProcess) {
@@ -3261,6 +1943,7 @@ async function loopOnce() {
     }
   }
 }
+
 
 async function main() {
   console.log("Worker start");
@@ -3276,97 +1959,7 @@ async function main() {
   }
 }
 
-const __FYD_WORKER_IS_ENTRY = (() => {
-  try {
-    return import.meta.url === new URL(process.argv[1], "file:").href;
-  } catch {
-    return false;
-  }
-})();
-
-if (__FYD_WORKER_IS_ENTRY) {
-  main().catch((e) => { console.error("FATAL in worker main:", e); });
-}
-
-// ---- FYD: Chromium guard (prevents runaway Playwright) ----
-const FYD_MAX_CHROMIUM_PROCS = Number(process.env.MAX_CHROMIUM_PROCS || 4);
-const FYD_CHROMIUM_GUARD_SLEEP_MS = Number(process.env.CHROMIUM_GUARD_SLEEP_MS || 30000);
-const FYD_MIN_AVAILABLE_MB = Number(process.env.MIN_AVAILABLE_MB || 512);
-const FYD_CHROMIUM_GUARD_KILL = String(process.env.CHROMIUM_GUARD_KILL || "").trim();
-const FYD_CHROMIUM_GUARD_KILL_COOLDOWN_MS = Number(process.env.CHROMIUM_GUARD_KILL_COOLDOWN_MS || 120000);
-
-async function __fydGetAvailableMemMb() {
-  try {
-    const fs = await import("node:fs/promises");
-    const txt = await fs.readFile("/proc/meminfo", "utf8");
-    const m = txt.match(/^MemAvailable:\s+(\d+)\s+kB/m);
-    if (m) return Math.floor(Number(m[1]) / 1024);
-  } catch {}
-  return null;
-}
-
-async function __fydGetChromiumProcCount() {
-  try {
-    const cp = await import("node:child_process");
-    const out = String(cp.execSync('pgrep -af "chrome-headless-shell" || true', { encoding: "utf8" }));
-    const lines = out.split("\n").map(l => l.trim()).filter(Boolean);
-    // COUNT ALL chromium procs (roots + children)
-    return lines.length;
-  } catch {
-    return 0;
-  }
-}
-
-async function __fydKillRootChromium() {
-  try {
-    const cp = await import("node:child_process");
-    const out = String(cp.execSync('pgrep -af "chrome-headless-shell" || true', { encoding: "utf8" }));
-    const pids = out
-      .split("\n")
-      .map(l => l.trim())
-      .filter(Boolean)
-      .filter(l => !l.includes(" --type="))
-      .map(l => Number(String(l).split(/\s+/)[0]))
-      .filter(n => Number.isFinite(n) && n > 1);
-
-    for (const pid of pids) {
-      try { process.kill(pid, "SIGKILL"); } catch {}
-    }
-  } catch {}
-}
-
-async function __fydChromiumGuard(tag) {
-  const maxP = Number.isFinite(FYD_MAX_CHROMIUM_PROCS) && FYD_MAX_CHROMIUM_PROCS > 0 ? FYD_MAX_CHROMIUM_PROCS : 4;
-  const minMb = Number.isFinite(FYD_MIN_AVAILABLE_MB) && FYD_MIN_AVAILABLE_MB > 0 ? FYD_MIN_AVAILABLE_MB : 512;
-  const sleepMs = Number.isFinite(FYD_CHROMIUM_GUARD_SLEEP_MS) && FYD_CHROMIUM_GUARD_SLEEP_MS > 0 ? FYD_CHROMIUM_GUARD_SLEEP_MS : 30000;
-
-  while (true) {
-    const p = await __fydGetChromiumProcCount();
-    const avail = await __fydGetAvailableMemMb();
-
-    const tooMany = (p != null && p > maxP);
-    const tooLowMem = (avail != null && avail <= minMb);
-
-    if (!tooMany && !tooLowMem) return;
-
-    const killOn = (FYD_CHROMIUM_GUARD_KILL === "1" || String(FYD_CHROMIUM_GUARD_KILL || "").toLowerCase() === "true");
-    if (killOn) {
-      const now = Date.now();
-      const cd = (Number.isFinite(FYD_CHROMIUM_GUARD_KILL_COOLDOWN_MS) && FYD_CHROMIUM_GUARD_KILL_COOLDOWN_MS > 0)
-        ? FYD_CHROMIUM_GUARD_KILL_COOLDOWN_MS
-        : 120000;
-      const last = Number(globalThis.__fydChromiumKillTs || 0);
-      if (!last || (now - last) > cd) {
-        globalThis.__fydChromiumKillTs = now;
-        try {
-          await __fydKillRootChromium();
-        } catch {}
-        console.log("[guard] " + (tag || "chromium") + " KILL runaway chromium procs=" + p + " max=" + maxP);
-      }
-    }
-
-    console.log("[guard] " + (tag || "chromium") + " wait: procs=" + p + " max=" + maxP + " availMB=" + avail + " minMB=" + minMb);
-    await sleep(sleepMs);
-  }
-}
-// ---- FYD: Chromium guard END ----
+main().catch((err) => {
+  console.error("Worker fatal error", err);
+  process.exit(1);
+});

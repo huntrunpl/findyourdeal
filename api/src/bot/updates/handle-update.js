@@ -109,6 +109,13 @@ export function createHandleUpdate(ctx) {
     return map.get(c) || c;
   }
 
+  function modeLabel(lang, mode) {
+    const m = String(mode || "single").toLowerCase();
+    if (m === "batch") return t(lang, "mode_batch");
+    if (m === "off") return t(lang, "mode_off");
+    return t(lang, "mode_single");
+  }
+
   return async function handleUpdate(update) {
     if (update.callback_query) {
       await handleCallback(update);
@@ -120,7 +127,7 @@ export function createHandleUpdate(ctx) {
 
     const chatType = msg.chat?.type || "";
     if (chatType && chatType !== "private") {
-      await tgSend(String(msg.chat.id), "❌ Private chat only.");
+      await tgSend(String(msg.chat.id), t(langFast, "private_chat_only"));
       return;
     }
 
@@ -131,6 +138,7 @@ export function createHandleUpdate(ctx) {
 
     const chatId = String(msg.chat.id);
     const from = msg.from || {};
+    const langFast = from.language_code || "en";
     const tgId = from.id ? String(from.id) : null;
     if (!tgId) return;
 
@@ -146,7 +154,7 @@ export function createHandleUpdate(ctx) {
 
     const user = await getUserWithPlanByTelegramId(tgId);
     if (!user?.id) {
-      await tgSend(chatId, "Use /start.");
+      await tgSend(chatId, t(langFast, "prompt_start"));
       return;
     }
 
@@ -168,41 +176,24 @@ export function createHandleUpdate(ctx) {
       if (kind === "on") {
         const chk = await dbQuery(`SELECT id FROM links WHERE id=$1 AND user_id=$2 LIMIT 1`, [linkId, Number(user.id)]);
         if (!chk.rowCount) {
-          await tgSend(chatId, lang === "pl"
-            ? `❌ Link <b>${linkId}</b> nie należy do Twojego konta.`
-            : `❌ Link <b>${linkId}</b> is not on your account.`
-          );
-          return;
-        }
+            await tgSend(chatId, t(lang, "link_not_owned", { linkId }));
+            return;
+          }
 
-        await clearLinkNotificationMode(user.id, chatId, linkId).catch(() => {});
+        const chatMode = modeLabel(lang, chatModeRaw);
 
-        const cn = await dbQuery(`SELECT mode FROM chat_notifications WHERE chat_id=$1 AND user_id=$2 LIMIT 1`, [chatId, Number(user.id)]).catch(() => ({ rows: [] }));
-        const chatMode = String(cn.rows?.[0]?.mode || "single").toLowerCase() === "batch"
-          ? (lang === "pl" ? "zbiorczo" : "batch")
-          : (lang === "pl" ? "pojedynczo" : "single");
-
-        await tgSend(chatId, lang === "pl"
-          ? `✅ Link <b>${linkId}</b> WŁĄCZONY (dziedziczy tryb czatu: <b>${chatMode}</b>).`
-          : `✅ Link <b>${linkId}</b> ENABLED (inherits chat mode: <b>${chatMode}</b>).`
-        );
+        await tgSend(chatId, t(lang, "link_enabled_inherit", { linkId, chatMode }));
         return;
       }
 
       const mode = (kind === "zbiorcze" || kind === "batch") ? "batch" : kind === "off" ? "off" : "single";
       const res = await setPerLinkMode(chatId, user.id, linkId, mode);
       if (!res.ok) {
-        await tgSend(chatId, lang === "pl" ? "❌ Link nie należy do Twojego konta." : "❌ Link is not on your account.");
+        await tgSend(chatId, t(lang, "link_not_owned", { linkId }));
         return;
       }
-      const pretty =
-        res.mode === "batch" ? (lang === "pl" ? "zbiorczo" : "batch") :
-        res.mode === "off" ? "OFF" :
-        (lang === "pl" ? "pojedynczo" : "single");
-      await tgSend(chatId, lang === "pl"
-        ? `✅ Link <b>${linkId}</b> ustawiony: <b>${pretty}</b>`
-        : `✅ Link <b>${linkId}</b> set to: <b>${pretty}</b>`
-      );
+      const pretty = modeLabel(lang, res.mode);
+      await tgSend(chatId, t(lang, "link_mode_set", { linkId, mode: pretty }));
       return;
     }
 
@@ -248,7 +239,7 @@ export function createHandleUpdate(ctx) {
     if (command === "/nazwa") return handleNazwa(msg, user);
     if (command === "/technik") return handleTechnik(msg, user, argText);
 
-    const lang = await fydResolveLang(chatId, user, from.language_code || "");
-    await tgSend(chatId, t(lang, "unknown_command") || (lang === "pl" ? "❓ Nieznana komenda. Użyj /help." : "❓ Unknown command. Use /help."));
+    const resolvedLang = await fydResolveLang(chatId, user, from.language_code || "");
+    await tgSend(chatId, t(resolvedLang, "unknown_command"));
   };
 }

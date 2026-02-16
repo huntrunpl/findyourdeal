@@ -1,9 +1,8 @@
 import { pool } from "@/lib/db";
 import { getSessionUserId } from "@/lib/auth";
-import { startCheckout } from "./actions";
-import TopBar from "../_components/TopBar";
 import getPanelLang from "../_lib/getPanelLang";
 import {t, normLang} from "../_lib/i18n";
+import BillingCTA from "./_components/BillingCTA";
 
 export const dynamic = "force-dynamic";
 
@@ -127,14 +126,6 @@ export default async function BillingPage() {
 
   return (
     <main className="p-6 space-y-6">
-      <TopBar
-        title={t(lang, "billing_title")}
-        current="billing"
-        planCode={String(ent?.plan_code || "free")}
-        expiresAtLabel={expiresLabel}
-        enabledCount={enabledCount}
-        limitTotal={limitTotal}
-       lang={lang}/>
 
       <section className="border rounded p-4 space-y-4">
         <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -200,69 +191,7 @@ export default async function BillingPage() {
         </div>
       </section>
 
-      {currentPlan === "platinum" ? (
-        <section className="border rounded p-4 space-y-3">
-          <h2 className="font-semibold">{L.billing_addons_title}</h2>
-
-          <div className="text-sm opacity-80">
-            {t(lang, "billing_addons_desc", { plan: planLabel(currentPlan) })}
-          </div>
-
-          <form action={startCheckout} className="flex gap-3 items-center flex-wrap">
-            <input type="hidden" name="plan_code" value="addon" />
-            <input type="hidden" name="addon_qty" value="1" />
-
-            <button className="border rounded px-4 py-2">{L.billing_buy_addon_btn}</button>
-
-            <div className="text-xs opacity-60">
-              {L.billing_after_payment}
-            </div>
-          </form>
-        </section>
-      ) : (
-        <section className="border rounded p-4 space-y-3">
-          <h2 className="font-semibold">{L.billing_change_plan_title}</h2>
-
-          <div className="text-sm opacity-80">
-            Aktualny plan: <b>{planLabel(currentPlan)}</b>. Dostępne zmiany:{" "}
-            <b>
-              {upgrades.length ? upgrades.map((p) => planLabel(p)).join(", ") : "brak"}
-            </b>
-            .
-          </div>
-
-          {upgrades.length ? (
-            <form action={startCheckout} className="flex gap-3 items-end flex-wrap">
-              <div className="flex flex-col">
-                <label className="text-xs opacity-70">{L.billing_select_plan_label}</label>
-                <select
-                  name="plan_code"
-                  defaultValue={upgrades[0]}
-                  className="border rounded px-3 py-2"
-                >
-                  {upgrades.map((p) => (
-                    <option key={p} value={p}>
-                      {planLabel(p)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <button className="border rounded px-4 py-2">
-                {L.billing_checkout_btn}
-              </button>
-
-              <div className="text-xs opacity-60">
-                {L.billing_after_payment}
-              </div>
-            </form>
-          ) : (
-            <div className="text-sm opacity-70">
-              {L.billing_no_changes}
-            </div>
-          )}
-        </section>
-      )}
+      <BillingCTA currentPlan={currentPlan} lang={lang} />
     </main>
   );
 }

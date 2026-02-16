@@ -1,0 +1,73 @@
+import type { Metadata } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
+import "./globals.css";
+import getPanelLang from "./_lib/getPanelLang";
+import { LANGS } from "./_lib/i18n";
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
+
+export const metadata: Metadata = {
+  title: "FindYourDeal – Panel klienta",
+  description: "Panel klienta FindYourDeal: zarządzanie wyszukiwaniami i powiadomieniami.",
+};
+
+export default async function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  // Fetch user's language from DB (SoT)
+  const lang = await getPanelLang();
+  
+  // Find language display (flag + name)
+  const langInfo = LANGS.find(l => l.code === lang);
+  const langDisplay = langInfo ? `${langInfo.flag} ${langInfo.name}` : "🌍 English";
+
+  return (
+    <html lang={lang}>
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+        {/* Global Topbar - inline (YAGNI) */}
+        <div className="border-b bg-white sticky top-0 z-50">
+          <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+            {/* Left: Logo/Name */}
+            <div className="flex items-center gap-4">
+              <a href="/links" className="text-xl font-bold text-blue-600 hover:text-blue-700">
+                FindYourDeal
+              </a>
+            </div>
+
+            {/* Right: Language display + Settings link */}
+            <div className="flex items-center gap-3">
+              {/* Static language label (read-only) */}
+              <div className="border rounded px-3 py-1.5 text-sm" title="Current language">
+                {langDisplay}
+              </div>
+
+              {/* Settings link */}
+              <a 
+                href="/settings" 
+                className="border rounded px-3 py-1.5 text-sm bg-blue-600 text-white hover:bg-blue-700"
+                title="Settings"
+              >
+                ⚙️ Ustawienia
+              </a>
+            </div>
+          </div>
+        </div>
+
+        {/* Page content */}
+        <main>
+          {children}
+        </main>
+      </body>
+    </html>
+  );
+}

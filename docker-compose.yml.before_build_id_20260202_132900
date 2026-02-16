@@ -1,0 +1,116 @@
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fyd
+      POSTGRES_USER: fyd
+    env_file:
+      - .env.db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "fyd"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  api:
+    build: .
+    restart: unless-stopped
+    working_dir: /app/api
+    command: ["npm", "run", "start"]
+    env_file:
+      - .env
+    depends_on:
+      - db
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  panel:
+    build:
+      context: .
+      dockerfile: Dockerfile.panel
+    restart: unless-stopped
+    working_dir: /app/panel
+    command: ["npm","run","start","--","-p","3000"]
+    env_file:
+      - .env
+    depends_on:
+      - db
+    ports:
+      - "3001:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    init: true
+    working_dir: /app/api
+    env_file:
+      - .env
+    environment:
+      - API_BASE=http://api:3000
+      - LOOP_DELAY_MS=300000
+      - MAX_CHROMIUM_PROCS=35
+      - MIN_AVAILABLE_MB=1024
+      - CHROMIUM_GUARD_SLEEP_MS=60000
+      - CHROMIUM_GUARD_KILL=1
+      - CHROMIUM_GUARD_KILL_COOLDOWN_MS=120000
+    depends_on:
+      - db
+      - api
+    healthcheck:
+      test: ["CMD", "ps", "aux"]
+      interval: 30s
+      timeout: 5s
+      retries: 2
+
+  tg-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    init: true
+    working_dir: /app/api
+    command: ["node", "telegram-bot.js"]
+    env_file:
+      - .env
+    depends_on:
+      - db
+    environment:
+      - NODE_OPTIONS=--unhandled-rejections=warn
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "telegram-bot.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 2
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

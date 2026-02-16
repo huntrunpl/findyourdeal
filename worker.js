@@ -201,6 +201,11 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getTodayStart() {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
 function getItemKey(it) {
   return it?.itemKey || it?.item_key || it?.itemKeyNormalized || null;
 }
@@ -514,24 +519,67 @@ function buildVintedApiUrl(catalogUrl) {
 
 // ---------- Filtrowanie pod użytkownika ----------
 
-function matchFilters(item, filters = {}) {
+function matchFilters(item, filters = {}, stats = {}) {
   if (!filters || Object.keys(filters).length === 0) return true;
 
-  const price = typeof item.price === "number" ? item.price : null;
-
-  if (filters.minPrice != null && price != null && price < filters.minPrice) {
-    return false;
+  // Price filter: filters.price = {min, max}
+  if (filters.price && typeof filters.price === "object") {
+    const price = typeof item.price === "number" ? item.price : null;
+    if (price === null) {
+      if (stats) stats.drop_price = (stats.drop_price || 0) + 1;
+      return false; // No price when filter active = drop
+    }
+    if (filters.price.min != null && price < filters.price.min) {
+      if (stats) stats.drop_price = (stats.drop_price || 0) + 1;
+      return false;
+    }
+    if (filters.price.max != null && price > filters.price.max) {
+      if (stats) stats.drop_price = (stats.drop_price || 0) + 1;
+      return false;
+    }
   }
-  if (filters.maxPrice != null && price != null && price > filters.maxPrice) {
-    return false;
-  }
 
+  // Brand filter: filters.brand = ["Nike", "Adidas"]
   if (Array.isArray(filters.brand) && filters.brand.length) {
     const brandLower = (item.brand || "").toLowerCase();
+    if (!brandLower) {
+      if (stats) stats.drop_brand = (stats.drop_brand || 0) + 1;
+      return false; // No brand when filter active = drop
+    }
     const ok = filters.brand.some((b) =>
       brandLower.includes(String(b).toLowerCase())
     );
-    if (!ok) return false;
+    if (!ok) {
+      if (stats) stats.drop_brand = (stats.drop_brand || 0) + 1;
+      return false;
+    }
+  }
+
+  // Size filter: filters.size = ["M", "L", "XL"]
+  if (Array.isArray(filters.size) && filters.size.length) {
+    const sizeLower = (item.size || "").toLowerCase();
+    if (!sizeLower) {
+      if (stats) stats.drop_size = (stats.drop_size || 0) + 1;
+      return false; // No size when filter active = drop
+    }
+    const ok = filters.size.some(
+      (s) => sizeLower === String(s).toLowerCase()
+    );
+    if (!ok) {
+      if (stats) stats.drop_size = (stats.drop_size || 0) + 1;
+      return false;
+    }
+  }
+
+  // Legacy support: minPrice/maxPrice/sizes/conditions
+  const price = typeof item.price === "number" ? item.price : null;
+  if (filters.minPrice != null && price != null && price < filters.minPrice) {
+    if (stats) stats.drop_price = (stats.drop_price || 0) + 1;
+    return false;
+  }
+  if (filters.maxPrice != null && price != null && price > filters.maxPrice) {
+    if (stats) stats.drop_price = (stats.drop_price || 0) + 1;
+    return false;
   }
 
   if (Array.isArray(filters.sizes) && filters.sizes.length) {
@@ -539,7 +587,10 @@ function matchFilters(item, filters = {}) {
     const ok = filters.sizes.some(
       (s) => sizeLower === String(s).toLowerCase()
     );
-    if (!ok) return false;
+    if (!ok) {
+      if (stats) stats.drop_size = (stats.drop_size || 0) + 1;
+      return false;
+    }
   }
 
   if (Array.isArray(filters.conditions) && filters.conditions.length) {
@@ -559,7 +610,7 @@ async function sendTelegram(method, payload) {
     console.error(
       "sendTelegram: brak TELEGRAM_BOT_TOKEN (TG) – nie wysyłam wiadomości"
     );
-    return;
+    return { ok: false, status: 0, body: null, rawText: null };
   }
 
   const url = `https://api.telegram.org/bot${TG}/${method}`;
@@ -582,13 +633,18 @@ async function sendTelegram(method, payload) {
       });
 
       const text = await res.text().catch(() => "");
+      let parsed = null;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = null;
+      }
 
       if (res.status === 429) {
         let retry = 30;
         try {
-          const data = JSON.parse(text);
-          if (data?.parameters?.retry_after) {
-            retry = Number(data.parameters.retry_after) || retry;
+          if (parsed?.parameters?.retry_after) {
+            retry = Number(parsed.parameters.retry_after) || retry;
           }
         } catch {
           // ignore
@@ -601,9 +657,11 @@ async function sendTelegram(method, payload) {
         continue;
       }
 
-      if (!res.ok) {
+      const ok = res.ok && (parsed?.ok !== false);
+
+      if (!ok) {
         console.error(
-          "sendTelegram: HTTP error",
+          "sendTelegram: HTTP/Telegram error",
           JSON.stringify({
             status: res.status,
             statusText: res.statusText,
@@ -621,11 +679,11 @@ async function sendTelegram(method, payload) {
         );
       }
 
-      break;
+      return { ok, status: res.status, body: parsed ?? text, rawText: text };
     } catch (err) {
       console.error("sendTelegram: exception", err);
       await sleep(2000);
-      break;
+      return { ok: false, status: 0, body: null, rawText: null };
     }
   }
 }
@@ -645,13 +703,93 @@ function formatLinkHeader(link) {
   return `🔍 <b>${escapeHtml(label)}</b>${idPart}`;
 }
 
+async function countSentOffersSince(userId, chatId, since) {
+  try {
+    const res = await notifyPool.query(
+      `SELECT COUNT(*)::int AS cnt FROM sent_offers WHERE user_id = $1 AND chat_id = $2 AND sent_at >= $3`,
+      [Number(userId), String(chatId), since]
+    );
+    return res.rows[0]?.cnt ?? 0;
+  } catch (e) {
+    console.error("countSentOffersSince error", e);
+    return 0;
+  }
+}
+
+async function insertSentOffers(rows = []) {
+  const arr = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (!arr.length) return 0;
+
+  const userIds = [];
+  const chatIds = [];
+  const linkIds = [];
+  const itemIds = [];
+  const prices = [];
+  const currencies = [];
+  const titles = [];
+  const urls = [];
+  const sentAts = [];
+
+  for (const r of arr) {
+    userIds.push(Number(r.user_id));
+    chatIds.push(String(r.chat_id));
+    linkIds.push(Number(r.link_id));
+    itemIds.push(String(r.item_id));
+    prices.push(r.price != null ? Number(r.price) : null);
+    currencies.push(r.currency != null ? String(r.currency) : null);
+    titles.push(r.title != null ? String(r.title) : null);
+    urls.push(r.url != null ? String(r.url) : null);
+    sentAts.push(r.sent_at ? r.sent_at : new Date());
+  }
+
+  const res = await notifyPool.query(
+    `
+    INSERT INTO sent_offers (user_id, chat_id, link_id, item_id, price, currency, title, url, sent_at)
+    SELECT * FROM UNNEST(
+      $1::int[],
+      $2::text[],
+      $3::int[],
+      $4::text[],
+      $5::numeric[],
+      $6::text[],
+      $7::text[],
+      $8::text[],
+      $9::timestamptz[]
+    )
+    ON CONFLICT (chat_id, link_id, item_id) DO NOTHING
+    `,
+    [userIds, chatIds, linkIds, itemIds, prices, currencies, titles, urls, sentAts]
+  );
+
+  return res.rowCount || 0;
+}
+
+function toSentOfferRow(userId, chatId, link, item) {
+  const itemId = getItemKey(item) || item?.url || item?.title || null;
+  if (!userId || !chatId || !link?.id || !itemId) return null;
+
+  return {
+    user_id: Number(userId),
+    chat_id: String(chatId),
+    link_id: Number(link.id),
+    item_id: String(itemId),
+    price: item?.price,
+    currency: item?.currency,
+    title: item?.title,
+    url: item?.url,
+    sent_at: new Date(),
+  };
+}
+
 function hiddenLink(url) {
   return `<a href="${escapeHtml(url)}">\u200B</a>`;
 }
 
 // wysyłka pojedynczej karty (photo / message) na konkretny chat
-async function tgSendItem(chatId, link, item, lang = "en") {
-  if (!TG) return;
+async function tgSendItem(chatId, link, item, lang = "en", meta = {}) {
+  if (!TG) return { sent: false, inserted: 0 };
+
+  const userId = meta?.userId ?? link.user_id ?? link.userId ?? null;
 
   const src = (link.source || detectSource(link.url) || "").toLowerCase();
   
@@ -733,25 +871,37 @@ async function tgSendItem(chatId, link, item, lang = "en") {
     typeof item.photoUrl === "string" &&
     /^https?:\/\//i.test(item.photoUrl);
 
-  if (canSendPhoto) {
-    await sendTelegram("sendPhoto", {
-      chat_id: chatId,
-      photo: item.photoUrl,
-      caption,
-      parse_mode: "HTML",
-      reply_markup: replyMarkup,
-    });
-  } else {
-    await sendTelegram("sendMessage", {
-      chat_id: chatId,
-      text: caption,
-      parse_mode: "HTML",
-      disable_web_page_preview: false,
-      reply_markup: replyMarkup,
-    });
+  const sendRes = canSendPhoto
+    ? await sendTelegram("sendPhoto", {
+        chat_id: chatId,
+        photo: item.photoUrl,
+        caption,
+        parse_mode: "HTML",
+        reply_markup: replyMarkup,
+      })
+    : await sendTelegram("sendMessage", {
+        chat_id: chatId,
+        text: caption,
+        parse_mode: "HTML",
+        disable_web_page_preview: false,
+        reply_markup: replyMarkup,
+      });
+
+  const sentOk = !!sendRes?.ok;
+  let inserted = 0;
+
+  if (sentOk) {
+    const row = toSentOfferRow(userId, chatId, link, item);
+    if (row) {
+      inserted = await insertSentOffers([row]);
+    }
+    if (inserted) {
+      console.error(`[sent_debug] chat=${chatId} link=${link.id} sent_n=${inserted}`);
+    }
   }
 
   await sleep(SLEEP_BETWEEN_ITEMS_MS);
+  return { sent: sentOk, inserted };
 }
 
 // tekst do trybu /zbiorcze
@@ -790,6 +940,7 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
   const now = new Date();
   const todayStr = now.toISOString().slice(0, 10);
   const nowHour = now.getHours();
+  const todayStart = getTodayStart();
 
   try {
     const res = await notifyPool.query(
@@ -806,6 +957,7 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
         u.plan_name,
         u.extra_link_packs,
         COALESCE(NULLIF(u.lang,''), 'en') AS lang,
+        u.timezone,
         qh.quiet_enabled,
         qh.quiet_from,
         qh.quiet_to
@@ -890,29 +1042,29 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
         typeof row.quiet_from === "number" ? row.quiet_from : 22;
       const quietTo = typeof row.quiet_to === "number" ? row.quiet_to : 7;
 
-      if (quietEnabled && isHourInQuietRange(nowHour, quietFrom, quietTo)) {
+      // Oblicz godzinę w timezone użytkownika
+      const userTz = row.timezone || "Europe/Warsaw";
+      let userHour = nowHour;
+      try {
+        const userTime = new Date().toLocaleString("en-US", {
+          timeZone: userTz,
+          hour: "numeric",
+          hour12: false,
+        });
+        userHour = parseInt(userTime, 10);
+      } catch (e) {
+        logDebug(`[warn] link=${link.id} chat=${chatId} invalid timezone=${userTz}, using server hour`);
+      }
+
+      if (quietEnabled && isHourInQuietRange(userHour, quietFrom, quietTo)) {
         logDebug(
-          `[skip] link=${link.id} chat=${chatId} reason=quiet_hours nowHour=${nowHour} range=${quietFrom}-${quietTo}`
+          `[skip] link=${link.id} chat=${chatId} reason=quiet_hours userHour=${userHour} userTz=${userTz} range=${quietFrom}-${quietTo}`
         );
         continue;
       }
 
-      // 3) limity dzienne
-      let dailyCount = row.daily_count || 0;
-
-      let dailyDateStr = null;
-      if (row.daily_count_date) {
-        if (row.daily_count_date.toISOString) {
-          dailyDateStr = row.daily_count_date.toISOString().slice(0, 10);
-        } else {
-          dailyDateStr = String(row.daily_count_date).slice(0, 10);
-        }
-      }
-
-      if (dailyDateStr !== todayStr) {
-        dailyCount = 0;
-        dailyDateStr = todayStr;
-      }
+      // 3) limity dzienne – liczymy z sent_offers (SoT)
+      const dailyCount = await countSentOffersSince(userId, chatId, todayStart);
 
       const planName = (row.plan_name || "none").toLowerCase();
       const extraPacks = Number(row.extra_link_packs || 0);
@@ -935,7 +1087,9 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
           maxDaily = 0;
       }
 
-      if (maxDaily <= 0 || dailyCount >= maxDaily) {
+      const remainingDaily = Math.max(0, maxDaily - dailyCount);
+
+      if (maxDaily <= 0 || remainingDaily <= 0) {
         logDebug(
           `[skip] link=${link.id} chat=${chatId} reason=daily_limit count=${dailyCount} max=${maxDaily}`
         );
@@ -947,43 +1101,70 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
               daily_count_date = $2
           WHERE chat_id = $3 AND user_id = $4
           `,
-          [dailyCount, dailyDateStr, chatId, userId]
+          [dailyCount, todayStr, chatId, userId]
         );
+        batchBuffers.delete(makeBatchKey(chatId, userId, link.id));
         continue;
       }
 
       const mode = row.mode === "batch" ? "batch" : "single";
 
+      let itemsForChat = items.slice(0, remainingDaily);
+      const droppedByDaily = items.length - itemsForChat.length;
+      let skippedForChat = (skippedExtra || 0) + droppedByDaily;
+
+      if (!itemsForChat.length) {
+        await notifyPool.query(
+          `
+          UPDATE chat_notifications
+          SET daily_count = $1,
+              daily_count_date = $2
+          WHERE chat_id = $3 AND user_id = $4
+          `,
+          [dailyCount, todayStr, chatId, userId]
+        );
+        continue;
+      }
+
       logDebug(
-        `[send] link=${link.id} chat=${chatId} mode=${mode} items=${items.length} skipped=${
-          skippedExtra || 0
-        }`
+        `[send] link=${link.id} chat=${chatId} mode=${mode} items=${itemsForChat.length} skipped=${
+          skippedForChat || 0
+        } limit_left=${remainingDaily}`
       );
 
       let sentSomething = false;
+      let insertedTotal = 0;
 
       if (mode === "single") {
-        for (const item of items) {
-          await tgSendItem(chatId, link, item, row.lang);
-          sentSomething = true;
+        for (const item of itemsForChat) {
+          const { sent, inserted } = await tgSendItem(chatId, link, item, row.lang, { userId });
+          if (sent) sentSomething = true;
+          insertedTotal += inserted || 0;
         }
       } else {
         const key = makeBatchKey(chatId, userId, link.id);
         const existing = batchBuffers.get(key) || { items: [], skippedExtra: 0 };
 
-        existing.items.push(...items);
-        if (typeof skippedExtra === "number" && skippedExtra > 0) {
-          existing.skippedExtra += skippedExtra;
-        }
+        // przytnij istniejący bufor jeśli przekracza dostępny limit dzienny
+        const trimmedExisting = existing.items.slice(0, remainingDaily);
+        const trimmedOut = existing.items.length - trimmedExisting.length;
+        let totalSkipped = (existing.skippedExtra || 0) + trimmedOut + skippedForChat;
 
-        if (existing.items.length < minBatchItems && existing.skippedExtra === 0) {
-          batchBuffers.set(key, existing);
+        const availableForNew = Math.max(0, remainingDaily - trimmedExisting.length);
+        const newItems = itemsForChat.slice(0, availableForNew);
+        const droppedNew = itemsForChat.length - newItems.length;
+        totalSkipped += droppedNew;
+
+        const bufferState = { items: [...trimmedExisting, ...newItems], skippedExtra: totalSkipped };
+
+        if (bufferState.items.length < minBatchItems && bufferState.skippedExtra === 0) {
+          batchBuffers.set(key, bufferState);
           logDebug(
-            `[batch] link=${link.id} chat=${chatId} buffered=${existing.items.length} min=${minBatchItems}`
+            `[batch] link=${link.id} chat=${chatId} buffered=${bufferState.items.length} min=${minBatchItems}`
           );
         } else {
-          const text = buildBatchMessage(link, existing.items, existing.skippedExtra);
-          await sendTelegram("sendMessage", {
+          const text = buildBatchMessage(link, bufferState.items, bufferState.skippedExtra);
+          const sendRes = await sendTelegram("sendMessage", {
             chat_id: chatId,
             text,
             parse_mode: "HTML",
@@ -1000,14 +1181,26 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
               ],
             },
           });
+
+          if (sendRes?.ok) {
+            const rows = bufferState.items
+              .map((it) => toSentOfferRow(userId, chatId, link, it))
+              .filter(Boolean);
+            if (rows.length) {
+              insertedTotal = await insertSentOffers(rows);
+              if (insertedTotal) {
+                console.error(`[sent_debug] chat=${chatId} link=${link.id} sent_n=${insertedTotal}`);
+              }
+            }
+            sentSomething = true;
+          }
+
           batchBuffers.delete(key);
-          sentSomething = true;
         }
       }
 
       if (sentSomething) {
-        const increment = mode === "single" ? items.length : existing.items.length;
-        dailyCount += increment;
+        const newDaily = Math.min(maxDaily, dailyCount + insertedTotal);
 
         await notifyPool.query(
           `
@@ -1017,7 +1210,17 @@ async function notifyChatsForLink(link, items, skippedExtra, opts = {}) {
               daily_count_date = $2
           WHERE chat_id = $3 AND user_id = $4
           `,
-          [dailyCount, dailyDateStr, chatId, userId]
+          [newDaily, todayStr, chatId, userId]
+        );
+      } else {
+        await notifyPool.query(
+          `
+          UPDATE chat_notifications
+          SET daily_count = $1,
+              daily_count_date = $2
+          WHERE chat_id = $3 AND user_id = $4
+          `,
+          [dailyCount, todayStr, chatId, userId]
         );
       }
     }
@@ -1616,13 +1819,17 @@ async function processLink(link) {
   const minBatchItems = cfg.minBatchItems;
 
   const filters = safeParseFilters(link.filters);
-  const filtered = (scraped || []).filter((it) => matchFilters(it, filters));
+  const filterStats = { drop_price: 0, drop_size: 0, drop_brand: 0 };
+  const filtered = (scraped || []).filter((it) => matchFilters(it, filters, filterStats));
 
-  console.log(
-    `[link ${link.id}] filtered=${filtered.length} filtersKeys=${
-      Object.keys(filters || {}).length
-    }`
-  );
+  const hasFilters = filters && Object.keys(filters).length > 0;
+  if (hasFilters || filterStats.drop_price || filterStats.drop_size || filterStats.drop_brand) {
+    console.log(
+      `[FILTERS] link=${link.id} fetched=${scraped.length} pass=${filtered.length} drop_price=${
+        filterStats.drop_price
+      } drop_size=${filterStats.drop_size} drop_brand=${filterStats.drop_brand}`
+    );
+  }
 
   if (!filtered.length) {
     logDebug(`Worker: no items after filters for link ${link.id}`);
@@ -1678,8 +1885,15 @@ async function processLink(link) {
 
     await insertLinkItems(link.id, freshNotSeen);
 
-    const toSend = freshNotSeen.slice(0, maxPerLoop);
+    // Apply maxPerRun limit if set
+    const maxPerRun = filters?.maxPerRun;
+    const effectiveMax = (maxPerRun && maxPerRun > 0) ? Math.min(maxPerRun, maxPerLoop) : maxPerLoop;
+    const toSend = freshNotSeen.slice(0, effectiveMax);
     const skipped = freshNotSeen.length - toSend.length;
+
+    if (maxPerRun && maxPerRun > 0 && toSend.length > 0) {
+      console.log(`[FILTERS] link=${link.id} maxPerRun=${maxPerRun} sent=${toSend.length} available=${freshNotSeen.length}`);
+    }
 
     await notifyChatsForLink(link, toSend, skipped, { minBatchItems });
 
@@ -1726,9 +1940,15 @@ async function processLink(link) {
   // zapisujemy do DB wszystkie świeże nie-widziane
   await insertLinkItems(link.id, freshNotSeen);
 
-  // wysyłka limitowana
-  const toSend = freshNotSeen.slice(0, maxPerLoop);
+  // wysyłka limitowana + maxPerRun
+  const maxPerRun = filters?.maxPerRun;
+  const effectiveMax = (maxPerRun && maxPerRun > 0) ? Math.min(maxPerRun, maxPerLoop) : maxPerLoop;
+  const toSend = freshNotSeen.slice(0, effectiveMax);
   const skipped = freshNotSeen.length - toSend.length;
+
+  if (maxPerRun && maxPerRun > 0 && toSend.length > 0) {
+    console.log(`[FILTERS] link=${link.id} maxPerRun=${maxPerRun} sent=${toSend.length} available=${freshNotSeen.length}`);
+  }
 
   if (toSend.length) {
     await notifyChatsForLink(link, toSend, skipped, { minBatchItems });

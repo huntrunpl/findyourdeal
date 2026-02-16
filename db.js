@@ -176,6 +176,49 @@ export async function initDb() {
       quiet_to SMALLINT NOT NULL DEFAULT 7
     );
   `);
+
+  // znacznik od którego liczymy historię wysyłek (globalnie dla czatu / per link)
+  await pool.query(`
+    ALTER TABLE chat_notifications
+    ADD COLUMN IF NOT EXISTS notify_from TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  `);
+
+  await pool.query(`
+    ALTER TABLE links
+    ADD COLUMN IF NOT EXISTS notify_from TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  `);
+
+  // historia faktycznie wysłanych ofert (SoT dla limitów i komend historii)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sent_offers (
+      id BIGSERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      chat_id TEXT NOT NULL,
+      link_id INTEGER NOT NULL,
+      item_id TEXT NOT NULL,
+      price NUMERIC NULL,
+      currency TEXT NULL,
+      title TEXT NULL,
+      url TEXT NULL,
+      sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (chat_id, link_id, item_id)
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS sent_offers_user_chat_sent_at_idx
+    ON sent_offers (user_id, chat_id, sent_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS sent_offers_user_link_sent_at_idx
+    ON sent_offers (user_id, link_id, sent_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS sent_offers_price_sort_idx
+    ON sent_offers (user_id, chat_id, sent_at DESC, price ASC);
+  `);
 }
 
 // =======================
@@ -493,6 +536,7 @@ export async function getLinksForWorker() {
     SELECT id, user_id, name, url, source, active, chat_id, thread_id, last_key, filters
     FROM links
     WHERE active = TRUE
+      AND (hidden IS NULL OR hidden = false)
     ORDER BY id ASC
     `
   );

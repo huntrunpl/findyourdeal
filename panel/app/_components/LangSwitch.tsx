@@ -21,6 +21,7 @@ export default function LangSwitch({ value }: { value: string }) {
       const res = await fetch("/api/user/lang", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ lang: next }),
       });
       

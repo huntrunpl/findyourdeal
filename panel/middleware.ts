@@ -13,6 +13,7 @@ export function middleware(req: NextRequest) {
     pathname.startsWith("/auth/login") ||
     pathname.startsWith("/api/auth/login") ||
     pathname.startsWith("/api/auth/logout") ||
+    pathname.startsWith("/api/build-info") ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
     pathname.startsWith("/public")

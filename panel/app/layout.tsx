@@ -1,6 +1,14 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import getPanelLang from "./_lib/getPanelLang";
+import { LANGS, t } from "./_lib/i18n";
+import { getSessionUserId } from "../lib/auth";
+import TimezonePill from "./_components/TimezonePill";
+import { pool } from "../lib/db";
+
+// Force dynamic rendering - don't cache language/user data
+export const dynamic = "force-dynamic";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,19 +21,142 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "FindYourDeal – Panel klienta",
-  description: "Panel klienta FindYourDeal: zarządzanie wyszukiwaniami i powiadomieniami.",
+  title: "FindYourDeal – Client Panel",
+  description: "FindYourDeal client panel: manage searches and notifications.",
 };
 
-export default function RootLayout({
+function formatDate(dt: any) {
+  if (!dt) return null;
+  const d = dt instanceof Date ? dt : new Date(dt);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat("pl-PL", {
+    timeZone: "Europe/Warsaw",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(d);
+}
+
+function planLabel(code: string) {
+  if (code === "starter") return "Starter";
+  if (code === "growth") return "Growth";
+  if (code === "platinum") return "Platinum";
+  if (code === "trial") return "Trial";
+  return "Free";
+}
+
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Fetch user's language from DB (SoT)
+  const lang = await getPanelLang();
+  
+  // Find language display (flag + name)
+  const langInfo = LANGS.find(l => l.code === lang);
+  const langDisplay = langInfo ? `${langInfo.flag} ${langInfo.name}` : "🌍 English";
+  
+  // Fetch plan info
+  const sessionUserId = await getSessionUserId();
+  let planPill = null;
+  
+  if (sessionUserId) {
+    try {
+      const entQ = await pool.query(
+        `SELECT plan_code, expires_at, links_limit_total
+         FROM user_entitlements_v
+         WHERE user_id = $1
+         LIMIT 1`,
+        [sessionUserId]
+      );
+      const ent = entQ.rows[0] || null;
+      
+      const linkQ = await pool.query(
+        `SELECT COUNT(*)::int AS cnt
+         FROM links
+         WHERE user_id = $1 AND active = true`,
+        [sessionUserId]
+      );
+      const enabledCount = linkQ.rows[0]?.cnt || 0;
+      
+      if (ent) {
+        const plan = planLabel(ent.plan_code);
+        const expires = formatDate(ent.expires_at);
+        const limit = ent.links_limit_total || 0;
+        planPill = (
+          <div className="text-xs text-gray-600 dark:text-zinc-400 border dark:border-zinc-700 rounded px-2 py-1 bg-white dark:bg-zinc-800 whitespace-normal sm:whitespace-nowrap">
+            {t(lang, "plan_lower")} <b>{plan}</b>
+            {expires && <> ({t(lang, "until_prefix")} {expires})</>}
+            {" · "}{t(lang, "active_lower")} <b>{enabledCount}/{limit}</b>
+          </div>
+        );
+      }
+    } catch (err) {
+      console.error("Failed to fetch plan info for layout:", err);
+    }
+  }
+  
+  // Build fingerprint
+  const buildId = process.env.BUILD_ID || "dev";
+
   return (
-    <html lang="pl">
+    <html lang={lang}>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        {children}
+        {/* Global Topbar - inline (YAGNI) */}
+        <div className="border-b bg-white dark:bg-zinc-900 dark:border-zinc-700 sticky top-0 z-50">
+          <div className="max-w-7xl mx-auto px-4 py-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              {/* Left: Logo + Build ID */}
+              <div className="flex items-center gap-4 w-full sm:w-auto">
+                <a href="/links" className="text-xl font-bold text-blue-600 hover:text-blue-700 dark:text-blue-400">
+                  FindYourDeal
+                </a>
+                <div className="text-xs text-gray-400 dark:text-zinc-500">
+                  Build: {buildId}
+                </div>
+              </div>
+
+              {/* Right: Pills + Links */}
+              <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto sm:justify-end">
+              {/* Plan pill */}
+              {planPill}
+              
+              {/* Static language label (read-only) */}
+              <div className="border dark:border-zinc-700 rounded px-3 py-1.5 text-sm text-black dark:text-white bg-white dark:bg-zinc-800 whitespace-normal sm:whitespace-nowrap truncate max-w-full" title="Current language">
+                {langDisplay}
+              </div>
+
+              {/* Timezone pill */}
+              <TimezonePill />
+
+              {/* Billing link */}
+              <a 
+                href="/billing" 
+                className="border dark:border-zinc-700 rounded px-3 py-1.5 text-sm text-black dark:text-white bg-white dark:bg-zinc-800 hover:bg-gray-50 dark:hover:bg-zinc-700 whitespace-normal sm:whitespace-nowrap"
+                title="Billing"
+              >
+                💳 Billing
+              </a>
+
+
+              {/* Settings link */}
+              <a 
+                href="/settings" 
+                className="border border-blue-600 rounded px-3 py-1.5 text-sm bg-blue-600 text-white hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 whitespace-normal sm:whitespace-nowrap"
+                title={t(lang, "settings_link")}
+              >
+                ⚙️ {t(lang, "settings_link")}
+              </a>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Page content */}
+        <main>
+          {children}
+        </main>
       </body>
     </html>
   );

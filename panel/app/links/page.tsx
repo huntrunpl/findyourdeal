@@ -6,7 +6,6 @@ import {
   setLinkNotificationMode,
   clearLinkNotificationMode,
 } from "./actions";
-import TopBar from "../_components/TopBar";
 import getPanelLang from "../_lib/getPanelLang";
 import {t, normLang} from "../_lib/i18n";
 
@@ -138,14 +137,8 @@ export default async function LinksPage({ searchParams }: { searchParams: SP }) 
 
   return (
     <main className="p-6 space-y-6">
-      <TopBar
-        title={t(lang,"links_title")}
-        current="links"
-        planCode={String(ent?.plan_code || "free")}
-        expiresAtLabel={ent?.expires_at ? formatWarsaw(ent.expires_at) : null}
-        enabledCount={enabledCount}
-        limitTotal={limitTotal}
-       lang={lang}/>
+      <h1 className="text-2xl font-semibold">{t(lang,"links_title")}</h1>
+
 
       <section className="border rounded p-4 space-y-2">
         <h2 className="font-semibold">{t(lang,"tg_commands_title")}</h2>
@@ -162,14 +155,18 @@ export default async function LinksPage({ searchParams }: { searchParams: SP }) 
           <li>{L.tg_cmd_mode_id}</li>
         </ul>
 
+
+        {process.env.PANEL_SHOW_CHAT_STATUS === "1" && (
+          <>
         <div className="text-xs opacity-70 pt-2">
           {L.chat_status_prefix}{" "}
           {primaryChatId ? (
             <>
-              <b>{chatEnabled ? t(lang,"notif_on") : t(lang,"notif_off")}</b>{" "}
-              · {L.chat_mode_prefix} <b>{modeLabel(lang, chatMode)}</b>
+              <b>{chatEnabled ? L.chat_status_on : L.chat_status_off}</b>
+              {" · "}
+              {L.chat_mode_label} <b>{modeLabel(lang, chatMode)}</b>
               {!chatEnabled ? (
-                <> · {L.notif_hint_off}</>
+                <>{" · "}{L.chat_enable_hint}</>
               ) : null}
             </>
           ) : (
@@ -178,6 +175,9 @@ export default async function LinksPage({ searchParams }: { searchParams: SP }) 
             </>
           )}
         </div>
+          </>
+        )}
+
       </section>
 
       <div className="flex items-end justify-between gap-4 flex-wrap">

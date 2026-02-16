@@ -176,6 +176,94 @@ export async function initDb() {
       quiet_to SMALLINT NOT NULL DEFAULT 7
     );
   `);
+
+  // znacznik od którego liczymy historię wysyłek (globalnie dla czatu / per link)
+  await pool.query(`
+    ALTER TABLE chat_notifications
+    ADD COLUMN IF NOT EXISTS notify_from TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  `);
+
+  await pool.query(`
+    ALTER TABLE links
+    ADD COLUMN IF NOT EXISTS notify_from TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  `);
+
+  // per-link item limit per worker loop
+  await pool.query(`
+    ALTER TABLE links
+    ADD COLUMN IF NOT EXISTS max_items_per_loop INTEGER NULL;
+  `);
+
+  // historia faktycznie wysłanych ofert (SoT dla limitów i komend historii)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sent_offers (
+      id BIGSERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      chat_id TEXT NOT NULL,
+      link_id INTEGER NOT NULL,
+      item_id TEXT NOT NULL,
+      price NUMERIC NULL,
+      currency TEXT NULL,
+      title TEXT NULL,
+      url TEXT NULL,
+      sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (chat_id, link_id, item_id)
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS sent_offers_user_chat_sent_at_idx
+    ON sent_offers (user_id, chat_id, sent_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS sent_offers_user_link_sent_at_idx
+    ON sent_offers (user_id, link_id, sent_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS sent_offers_price_sort_idx
+    ON sent_offers (user_id, chat_id, sent_at DESC, price ASC);
+  `);
+
+  // Admin audit log (KROK 6)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS public.admin_audit_log (
+      id BIGSERIAL PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+      action TEXT NOT NULL,
+      status TEXT NOT NULL,
+      reason TEXT NULL,
+
+      caller_tg_id BIGINT NOT NULL,
+      caller_user_id BIGINT NULL,
+      caller_role TEXT NULL,
+
+      target_tg_id BIGINT NULL,
+      target_user_id BIGINT NULL,
+
+      chat_id BIGINT NULL,
+      message_id BIGINT NULL,
+
+      payload JSONB NULL
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_log_created_at
+    ON public.admin_audit_log(created_at DESC);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_log_action
+    ON public.admin_audit_log(action);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_log_target_tg
+    ON public.admin_audit_log(target_tg_id);
+  `);
 }
 
 // =======================
@@ -210,7 +298,7 @@ export async function ensureUser(
       username = EXCLUDED.username,
       first_name = EXCLUDED.first_name,
       last_name = EXCLUDED.last_name,
-      language_code = COALESCE(users.language_code, EXCLUDED.language_code),
+      language_code = EXCLUDED.language_code,
       updated_at = NOW()
     RETURNING *;
     `,
@@ -265,6 +353,11 @@ export async function getUserWithPlanByTelegramId(tgId) {
   return q.rows[0] || null;
 }
 
+// Alias for getUserWithPlanByTelegramId (used by panel-dev-auth and status command)
+export async function getUserEntitlementsByTelegramId(tgId) {
+  return getUserWithPlanByTelegramId(tgId);
+}
+
 export async function setUserTelegramChatId(userId, chatId) {
   const uid = Number(userId);
   const cid = Number(chatId);
@@ -311,6 +404,33 @@ export async function clearLinkNotificationMode(userId, chatId, linkId) {
     `DELETE FROM link_notification_modes WHERE user_id=$1 AND chat_id=$2 AND link_id=$3`,
     [Number(userId), String(chatId), Number(linkId)]
   );
+}
+
+export async function resetLinkOverridesForUserId(linkId, userId, chatId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    
+    // 1. Usuń per-link mode override
+    await client.query(
+      `DELETE FROM link_notification_modes WHERE user_id=$1 AND chat_id=$2 AND link_id=$3`,
+      [Number(userId), String(chatId), Number(linkId)]
+    );
+    
+    // 2. Reset notify_from (zaczynamy zbierać oferty od teraz)
+    const res = await client.query(
+      `UPDATE links SET notify_from = NOW() WHERE id = $1 AND user_id = $2 RETURNING id, name, url`,
+      [Number(linkId), Number(userId)]
+    );
+    
+    await client.query('COMMIT');
+    return res.rows[0] || null;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function getUserById(userId) {
@@ -429,6 +549,7 @@ export async function getLinksByUserId(userId, activeOnly = false) {
     FROM links
     WHERE user_id = $1
       AND ($2::boolean = FALSE OR active = TRUE)
+      AND (hidden = FALSE OR hidden IS NULL)
     ORDER BY id ASC
     `,
     [Number(userId), !!activeOnly]
@@ -473,6 +594,20 @@ export async function deactivateLinkForUserId(linkId, userId) {
   return q.rows[0] || null;
 }
 
+export async function updateLinkNameForUserId(linkId, userId, newName) {
+  const q = await pool.query(
+    `
+    UPDATE links
+    SET label = $3
+    WHERE id = $1 AND user_id = $2
+    RETURNING id, name, url
+    `,
+    [Number(linkId), Number(userId), newName]
+  );
+  return q.rows[0] || null;
+}
+
+
 // ===== FIX: brakujące eksporty (API + worker) =====
 function __fydParsePrice(raw) {
   if (raw == null) return { price: null, currency: null };
@@ -490,7 +625,7 @@ function __fydParsePrice(raw) {
 export async function getLinksForWorker() {
   const q = await pool.query(
     `
-    SELECT id, user_id, name, url, source, active, chat_id, thread_id, last_key, filters
+    SELECT id, user_id, name, url, source, active, chat_id, thread_id, last_key, filters, max_items_per_loop
     FROM links
     WHERE active = TRUE
     ORDER BY id ASC
@@ -594,25 +729,25 @@ async function ensureQuietHoursTable() {
 }
 
 export async function getQuietHours(chatId) {
-  await ensureQuietHoursTable();
+  // Read from chat_quiet_hours (panel table) - single source of truth
   const q = await pool.query(
-    `SELECT chat_id, quiet_enabled, quiet_from, quiet_to FROM quiet_hours WHERE chat_id = $1 LIMIT 1`,
+    `SELECT chat_id, quiet_enabled, quiet_from, quiet_to FROM chat_quiet_hours WHERE chat_id = $1 LIMIT 1`,
     [String(chatId)]
   );
   return q.rows[0] || null;
 }
 
 export async function setQuietHours(chatId, fromHour, toHour) {
-  await ensureQuietHoursTable();
+  // Write to chat_quiet_hours (panel table) - single source of truth
   const f = Number(fromHour);
   const t = Number(toHour);
 
   const q = await pool.query(
     `
-    INSERT INTO quiet_hours (chat_id, quiet_enabled, quiet_from, quiet_to, updated_at)
-    VALUES ($1, TRUE, $2, $3, NOW())
+    INSERT INTO chat_quiet_hours (chat_id, quiet_enabled, quiet_from, quiet_to)
+    VALUES ($1, TRUE, $2, $3)
     ON CONFLICT (chat_id)
-    DO UPDATE SET quiet_enabled = TRUE, quiet_from = EXCLUDED.quiet_from, quiet_to = EXCLUDED.quiet_to, updated_at = NOW()
+    DO UPDATE SET quiet_enabled = TRUE, quiet_from = EXCLUDED.quiet_from, quiet_to = EXCLUDED.quiet_to
     RETURNING chat_id, quiet_enabled, quiet_from, quiet_to
     `,
     [String(chatId), f, t]
@@ -621,13 +756,13 @@ export async function setQuietHours(chatId, fromHour, toHour) {
 }
 
 export async function disableQuietHours(chatId) {
-  await ensureQuietHoursTable();
+  // Write to chat_quiet_hours (panel table) - single source of truth
   const q = await pool.query(
     `
-    INSERT INTO quiet_hours (chat_id, quiet_enabled, updated_at)
-    VALUES ($1, FALSE, NOW())
+    INSERT INTO chat_quiet_hours (chat_id, quiet_enabled)
+    VALUES ($1, FALSE)
     ON CONFLICT (chat_id)
-    DO UPDATE SET quiet_enabled = FALSE, updated_at = NOW()
+    DO UPDATE SET quiet_enabled = FALSE
     RETURNING chat_id, quiet_enabled, quiet_from, quiet_to
     `,
     [String(chatId)]
@@ -635,3 +770,72 @@ export async function disableQuietHours(chatId) {
   return q.rows[0] || null;
 }
 
+// =======================
+// Admin audit log (KROK 6)
+// =======================
+export async function logAdminAudit({
+  action,
+  status,
+  reason = null,
+  callerTgId,
+  callerUserId = null,
+  callerRole = null,
+  targetTgId = null,
+  targetUserId = null,
+  chatId = null,
+  messageId = null,
+  payload = null
+}) {
+  try {
+    await pool.query(
+      `
+      INSERT INTO public.admin_audit_log (
+        action, status, reason,
+        caller_tg_id, caller_user_id, caller_role,
+        target_tg_id, target_user_id,
+        chat_id, message_id,
+        payload
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `,
+      [
+        action,
+        status,
+        reason,
+        callerTgId ? Number(callerTgId) : null,
+        callerUserId ? Number(callerUserId) : null,
+        callerRole,
+        targetTgId ? Number(targetTgId) : null,
+        targetUserId ? Number(targetUserId) : null,
+        chatId ? Number(chatId) : null,
+        messageId ? Number(messageId) : null,
+        payload ? JSON.stringify(payload) : null
+      ]
+    );
+  } catch (err) {
+    // Log error but don't crash the command
+    console.error("[AUDIT_LOG_ERROR]", err?.stack || err);
+  }
+}
+// =======================
+// Admin audit log cleanup (KROK 6.2)
+// =======================
+export async function cleanupAuditLog(retentionDays = 180) {
+  try {
+    const result = await pool.query(
+      `DELETE FROM public.admin_audit_log WHERE created_at < NOW() - INTERVAL '${retentionDays} days'`
+    );
+    const deletedRows = result.rowCount || 0;
+    
+    if (deletedRows > 0) {
+      console.log(`[AUDIT_CLEANUP] Deleted ${deletedRows} audit log entries older than ${retentionDays} days`);
+    } else {
+      console.log(`[AUDIT_CLEANUP] No audit log entries to delete (retention: ${retentionDays} days)`);
+    }
+    
+    return deletedRows;
+  } catch (err) {
+    console.error("[AUDIT_CLEANUP_ERROR]", err?.stack || err);
+    return 0;
+  }
+}

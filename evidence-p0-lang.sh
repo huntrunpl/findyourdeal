@@ -1,0 +1,17 @@
+#!/bin/bash
+echo "🔍 P0 EVIDENCE COLLECTION"
+echo ""
+echo "1. DB State:"
+docker compose exec -T db psql -U fyd -d fyd -c "SELECT id, language, lang, updated_at FROM users WHERE id=1;"
+echo ""
+echo "2. Active Sessions:"
+docker compose exec -T db psql -U fyd -d fyd -c "SELECT id::text, user_id, expires_at FROM panel_sessions WHERE expires_at > NOW() LIMIT 3;"
+echo ""
+echo "3. Recent 401 errors:"
+docker compose logs panel --tail 500 | grep -c "401"
+echo ""
+echo "4. Last language API calls:"
+docker compose logs panel --tail 500 | grep "api/user/lang" | tail -10
+echo ""
+echo "5. Credentials in Settings:"
+docker compose exec panel grep -c 'credentials: "include"' /app/panel/app/settings/page.tsx || echo "0"

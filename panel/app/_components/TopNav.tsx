@@ -1,7 +1,9 @@
 import Link from "next/link";
+import { t, type Lang } from "../_lib/i18n";
 
 type Props = {
   current: string; // "links" | "billing" | ...
+  lang: Lang;
 };
 
 function tabClass(active: boolean) {
@@ -11,14 +13,14 @@ function tabClass(active: boolean) {
   ].join(" ");
 }
 
-export default function TopNav({ current }: Props) {
+export default function TopNav({ current, lang }: Props) {
   return (
     <nav className="flex items-center gap-2">
       <Link className={tabClass(current === "links")} href="/links">
-        Wyszukiwania
+        {t(lang, "nav_links")}
       </Link>
       <Link className={tabClass(current === "billing")} href="/billing">
-        Billing
+        {t(lang, "nav_billing")}
       </Link>
     </nav>
   );

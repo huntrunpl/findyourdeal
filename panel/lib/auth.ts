@@ -12,6 +12,7 @@ const SESSION_DAYS = envInt("PANEL_SESSION_DAYS", 14);
 const TOKEN_MINUTES = envInt("PANEL_TOKEN_MINUTES", 10);
 
 export async function consumePanelLoginToken(token: string): Promise<number | null> {
+  console.log("[consumePanelLoginToken] token:", token ? token.substring(0, 10) + "..." : "EMPTY");
   const t = (token || "").trim();
   if (!t) return null;
 
@@ -28,6 +29,7 @@ export async function consumePanelLoginToken(token: string): Promise<number | nu
     );
 
     const row = q.rows[0];
+      console.log("[consumePanelLoginToken] Row not found in DB");
     if (!row) {
       await client.query("ROLLBACK");
       return null;
@@ -53,9 +55,12 @@ export async function consumePanelLoginToken(token: string): Promise<number | nu
     // Wygasłe tokeny usuń z 5-minutowym buforem (na wypadek retry logic)
     await client.query(
       `DELETE FROM panel_login_tokens
-       WHERE expires_at < NOW() - INTERVAL '5 minutes'
-       ORDER BY created_at ASC
-       LIMIT 100`
+       WHERE token IN (
+         SELECT token FROM panel_login_tokens
+         WHERE expires_at < NOW() - INTERVAL '5 minutes'
+         ORDER BY created_at ASC
+         LIMIT 100
+       )`
     );
 
     await client.query("COMMIT");
@@ -78,9 +83,12 @@ export async function createPanelSession(
   // Cleanup wygasłych sesji tego usera (max 50) aby nie gromadzić starych
   await pool.query(
     `DELETE FROM panel_sessions
-     WHERE user_id=$1 AND expires_at < NOW()
-     ORDER BY expires_at ASC
-     LIMIT 50`,
+     WHERE id IN (
+       SELECT id FROM panel_sessions
+       WHERE user_id=$1 AND expires_at < NOW()
+       ORDER BY expires_at ASC
+       LIMIT 50
+     )`,
     [userId]
   );
 

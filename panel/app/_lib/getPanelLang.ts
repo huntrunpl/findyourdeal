@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { unstable_noStore as noStore } from "next/cache";
 import pg from "pg";
 import { normLang, type Lang } from "./i18n";
 
@@ -37,13 +38,16 @@ async function getUserIdFromAnySessionCookie(): Promise<number | null> {
 }
 
 export async function getPanelLang(): Promise<Lang> {
+  // Disable caching - language can change frequently
+  noStore();
+  
   try {
     const userId = await getUserIdFromAnySessionCookie();
     if (!userId || !pool) return normLang("en");
 
-    // wspólne źródło prawdy z Telegramem: users.lang
+    // Source of truth: users.language (with lang as fallback for legacy)
     const { rows } = await pool.query(
-      `SELECT COALESCE(lang, 'en') AS lang FROM users WHERE id=$1 LIMIT 1`,
+      `SELECT COALESCE(language, lang, 'en') AS lang FROM users WHERE id=$1 LIMIT 1`,
       [userId]
     );
     return normLang(String(rows?.[0]?.lang || "en"));
