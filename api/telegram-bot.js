@@ -8,11 +8,11 @@ import { randomBytes } from "crypto";
 import { fileURLToPath } from "url";
 import os from "os";
 import { t, getUserLang } from "./i18n_unified.js";
-import { normalizeCommand, getPrimaryAlias } from "./command_aliases.js";
+import { normalizeCommand, getPrimaryAlias, generateHelpText } from "./command_aliases.js";
 
 const __filename = fileURLToPath(import.meta.url);
-const BUILD_ID = "20260215_230000"; // KROK 11.2+11.3: Admin command aliases (11 langs) + localized help_admin + canonical routing
-const BOT_CODE_HASH = "4246c9f8583238ad3ddca9865b016d83"; // Code fingerprint for runtime verification
+const BUILD_ID = "20260216_010100"; // HOTFIX: ASCII-only lowercase command aliases + i18n examples fixed (no diacritics/uppercase)
+const BOT_CODE_HASH = "05da46f1a2f431b6f58e6e3a72526c40"; // Code fingerprint for runtime verification
 const START_TIME = Date.now(); // Bot start timestamp for uptime calculation
 
 import {
@@ -499,38 +499,8 @@ async function handleHelp(msg, user) {
   try {
     const lang = getUserLang(user);
     
-    const text =
-      t(lang, "cmd.help_greeting") + "\n\n" +
-      t(lang, "cmd.help_basic") + "\n" +
-      t(lang, "cmd.help_basic_lista") + "\n" +
-      t(lang, "cmd.help_basic_usun") + "\n" +
-      t(lang, "cmd.help_basic_dodaj") + "\n" +
-      t(lang, "cmd.help_basic_status") + "\n" +
-      t(lang, "cmd.help_basic_panel") + "\n" +
-      t(lang, "cmd.help_basic_nazwa") + "\n\n" +
-      t(lang, "cmd.help_notif") + "\n" +
-      t(lang, "cmd.help_notif_on") + "\n" +
-      t(lang, "cmd.help_notif_off") + "\n" +
-      t(lang, "cmd.help_notif_single") + "\n" +
-      t(lang, "cmd.help_notif_batch") + "\n\n" +
-      t(lang, "cmd.help_perlink") + "\n" +
-      t(lang, "cmd.help_perlink_commands") + "\n" +
-      t(lang, "cmd.help_perlink_max") + "\n\n" +
-      t(lang, "cmd.help_quiet") + "\n" +
-      t(lang, "cmd.help_quiet_show") + "\n" +
-      t(lang, "cmd.help_quiet_set") + "\n" +
-      t(lang, "cmd.help_quiet_off") + "\n\n" +
-      t(lang, "cmd.help_history") + "\n" +
-      t(lang, "cmd.help_history_najnowsze") + "\n" +
-      t(lang, "cmd.help_history_najnowsze_id") + "\n" +
-      t(lang, "cmd.help_history_najtansze") + "\n" +
-      t(lang, "cmd.help_history_najtansze_id") + "\n\n" +
-      t(lang, "cmd.help_plans") + "\n" +
-      t(lang, "cmd.help_plans_show") + "\n\n" +
-      t(lang, "cmd.help_lang") + "\n" +
-      t(lang, "cmd.help_lang_set") + "\n\n" +
-      t(lang, "cmd.help_examples") + "\n" +
-      t(lang, "cmd.help_examples_text") + "\n\n" +
+    // Use dynamic help generator instead of hardcoded i18n text
+    const text = generateHelpText(lang, t) + "\n\n" +
       `<i>v${BUILD_ID} • ${BOT_CODE_HASH.slice(0,8)} • ${os.hostname()}</i>`;
 
     await tgSend(chatId, text);
