@@ -33,42 +33,82 @@ export const COMMAND_ALIASES = {
     sk: ["pomoc", "pomoc"],
   },
   commands: {
-    en: ["commands", "komendy", "befehle", "commandes", "comandi", "comandos", "comenzi", "opdrachten", "příkazy"],
+    en: ["commands"],
+    pl: ["komendy"],
+    de: ["befehle"],
+    fr: ["commandes"],
+    it: ["comandi"],
+    es: ["comandos"],
+    pt: ["comandos"],
+    ro: ["comenzi"],
+    nl: ["opdrachten"],
+    cs: ["příkazy"],
+    sk: ["príkazy"],
   },
   status: {
-    en: ["status", "stan"],
-    de: ["zustand"],
-    fr: ["état"],
-    it: ["stato"],
-    es: ["estado"],
+    en: ["status"],
+    pl: ["status", "stan"],
+    de: ["status", "zustand"],
+    fr: ["status", "état"],
+    it: ["status", "stato"],
+    es: ["status", "estado"],
+    pt: ["status"],
+    ro: ["status", "stare"],
+    nl: ["status"],
+    cs: ["status", "stav"],
+    sk: ["status", "stav"],
   },
   panel: {
     en: ["panel"],
+    pl: ["panel"],
+    de: ["panel"],
+    fr: ["panel", "panneau"],
+    it: ["panel", "pannello"],
+    es: ["panel"],
+    pt: ["panel", "painel"],
+    ro: ["panel", "panou"],
+    nl: ["panel", "paneel"],
+    cs: ["panel"],
+    sk: ["panel"],
   },
   plany: {
-    en: ["plany", "plans", "pläne", "forfaits", "piani", "planes", "planos", "planuri", "plannen", "tarify", "plány"],
+    en: ["plans"],
+    pl: ["plany"],
+    de: ["plaene"],
+    fr: ["plans", "forfaits"],
+    it: ["piani"],
+    es: ["planes"],
+    pt: ["planos"],
+    ro: ["planuri"],
+    nl: ["plannen"],
+    cs: ["plany", "tarify"],
+    sk: ["plany"],
   },
   lista: {
-    en: ["lista", "list"],
+    en: ["list"],
+    pl: ["lista"],
     de: ["liste"],
-    it: ["elenco"],
-    es: ["listar"],
-    ro: ["listă"],
+    fr: ["liste"],
+    it: ["lista", "elenco"],
+    es: ["lista", "listar"],
+    pt: ["lista"],
+    ro: ["lista"],
     nl: ["lijst"],
     cs: ["seznam"],
+    sk: ["zoznam"],
   },
   dodaj: {
     en: ["add"],
     pl: ["dodaj"],
-    de: ["hinzufügen"],
+    de: ["hinzufuegen"],
     fr: ["ajouter"],
     it: ["aggiungi"],
     es: ["agregar"],
     pt: ["adicionar"],
-    ro: ["adaugă"],
+    ro: ["adauga"],
     nl: ["toevoegen"],
-    cs: ["přidat"],
-    sk: ["pridať"],
+    cs: ["pridat"],
+    sk: ["pridat"],
   },
   usun: {
     en: ["remove", "delete"],
@@ -78,39 +118,49 @@ export const COMMAND_ALIASES = {
     it: ["elimina"],
     es: ["eliminar"],
     pt: ["remover"],
-    ro: ["șterge"],
+    ro: ["sterge"],
     nl: ["verwijderen"],
     cs: ["odstranit"],
-    sk: ["odstrániť"],
+    sk: ["odstranit"],
   },
   nazwa: {
-    en: ["nazwa", "name", "rename", "namen", "nom", "renommer", "nome", "renombrar", "cambiar nome", "mudar nome", "ridenumi", "hernoemen", "přejmenovat", "premenovať"],
+    en: ["name", "rename"],
+    pl: ["nazwa"],
+    de: ["name", "namen"],
+    fr: ["nom", "renommer"],
+    it: ["nome"],
+    es: ["nombre", "renombrar"],
+    pt: ["nome"],
+    ro: ["nume"],
+    nl: ["naam", "hernoemen"],
+    cs: ["nazev", "prejmenovat"],
+    sk: ["nazov", "premenovat"],
   },
   on: {
     en: ["on"],
-    pl: ["wlacz", "włącz"],
+    pl: ["wlacz"],
     de: ["ein", "einschalten"],
-    fr: ["activer"],
+    fr: ["activer", "active"],
     it: ["attiva"],
     es: ["activar"],
     pt: ["ativar"],
-    ro: ["pornește"],
+    ro: ["porneste"],
     nl: ["aanzetten"],
     cs: ["zapnout"],
-    sk: ["zapnúť"],
+    sk: ["zapnut"],
   },
   off: {
     en: ["off"],
-    pl: ["wylacz", "wyłącz"],
+    pl: ["wylacz"],
     de: ["aus", "ausschalten"],
-    fr: ["désactiver"],
+    fr: ["desactiver", "desactive"],
     it: ["disattiva"],
     es: ["desactivar"],
     pt: ["desativar"],
-    ro: ["oprește"],
+    ro: ["opreste"],
     nl: ["uitzetten"],
     cs: ["vypnout"],
-    sk: ["vypnúť"],
+    sk: ["vypnut"],
   },
   pojedyncze: {
     en: ["single"],
@@ -118,23 +168,23 @@ export const COMMAND_ALIASES = {
     de: ["einzeln"],
     fr: ["unitaire"],
     it: ["singolo"],
-    es: ["individual", "individual"],
-    pt: ["único"],
+    es: ["individual"],
+    pt: ["unico"],
     nl: ["enkel"],
-    cs: ["jednotlivě"],
+    cs: ["jednotlive"],
     sk: ["jednotlivo"],
   },
   zbiorcze: {
     en: ["batch", "grouped"],
     pl: ["zbiorcze"],
     de: ["paket"],
-    fr: ["groupé"],
+    fr: ["groupe"],
     it: ["raggruppato"],
     es: ["agrupado"],
-    pt: ["em lote"],
+    pt: ["lote"],
     ro: ["grupate"],
     nl: ["gebundeld"],
-    cs: ["hromadně"],
+    cs: ["hromadne"],
     sk: ["hromadne"],
   },
   cisza: {
@@ -144,40 +194,114 @@ export const COMMAND_ALIASES = {
     fr: ["silence"],
     it: ["silenzio"],
     es: ["silencio"],
-    pt: ["silêncio"],
-    ro: ["tăcere"],
+    pt: ["silencio"],
+    ro: ["tacere"],
     nl: ["stil"],
     cs: ["ticho"],
+    sk: ["ticho"],
   },
   cisza_off: {
-    pl: ["cisza_off"],
     en: ["quiet_off"],
+    pl: ["cisza_off"],
     de: ["ruhe_aus"],
     fr: ["silence_off"],
     it: ["silenzio_off"],
     es: ["silencio_off"],
-    pt: ["silêncio_off"],
-    ro: ["tăcere_off"],
+    pt: ["silencio_off"],
+    ro: ["tacere_off"],
     nl: ["stil_uit"],
     cs: ["ticho_off"],
     sk: ["ticho_off"],
   },
   najnowsze: {
-    en: ["najnowsze", "latest", "recent", "neueste", "récents", "recenti", "recientes", "recentes", "recente", "nieuwste", "nejnovější", "najnovšie"],
+    en: ["latest", "recent"],
+    pl: ["najnowsze"],
+    de: ["neueste"],
+    fr: ["recents"],
+    it: ["recenti"],
+    es: ["recientes"],
+    pt: ["recentes"],
+    ro: ["recente"],
+    nl: ["nieuwste"],
+    cs: ["nejnovejsi"],
+    sk: ["najnovsie"],
   },
   najtansze: {
-    en: ["najtansze", "cheapest", "lowest", "billigste", "moins cher", "più economici", "más baratos", "mais baratos", "cele mai ieftine", "goedkoopste", "nejlevnější", "najlacnejšie"],
+    en: ["cheapest", "lowest"],
+    pl: ["najtansze"],
+    de: ["billigste"],
+    fr: ["moinscher"],
+    it: ["economici"],
+    es: ["baratos"],
+    pt: ["baratos"],
+    ro: ["ieftine"],
+    nl: ["goedkoopste"],
+    cs: ["nejlevnejsi"],
+    sk: ["najlacnejsie"],
   },
   lang: {
-    en: ["lang", "jezyk", "język", "sprache", "langue", "lingua", "idioma", "língua", "limbă", "taal", "jazyk"],
+    en: ["lang"],
+    pl: ["lang", "jezyk"],
+    de: ["lang", "sprache"],
+    fr: ["lang", "langue"],
+    it: ["lang", "lingua"],
+    es: ["lang", "idioma"],
+    pt: ["lang", "lingua"],
+    ro: ["lang", "limba"],
+    nl: ["lang", "taal"],
+    cs: ["lang", "jazyk"],
+    sk: ["lang", "jazyk"],
+  },
+  timezone: {
+    en: ["timezone"],
+    pl: ["timezone", "strefa"],
+    de: ["timezone", "zeitzone"],
+    fr: ["timezone", "fuseau"],
+    it: ["timezone", "fuso"],
+    es: ["timezone", "zona"],
+    pt: ["timezone", "fuso"],
+    ro: ["timezone", "fus"],
+    nl: ["timezone", "tijdzone"],
+    cs: ["timezone", "pasmo"],
+    sk: ["timezone", "pasmo"],
   },
   max: {
-    en: ["max", "maksimum", "maximum", "máximo"],
+    en: ["max"],
+    pl: ["max", "maksimum"],
+    de: ["max", "maximum"],
+    fr: ["max", "maximum"],
+    it: ["max", "massimo"],
+    es: ["max", "maximo"],
+    pt: ["max", "maximo"],
+    ro: ["max", "maxim"],
+    nl: ["max", "maximum"],
+    cs: ["max", "maximum"],
+    sk: ["max", "maximum"],
   },
   max_off: {
-    pl: ["max_off"],
     en: ["clear_max"],
+    pl: ["max_off"],
     de: ["max_aus"],
+    fr: ["max_off"],
+    it: ["max_off"],
+    es: ["max_off"],
+    pt: ["max_off"],
+    ro: ["max_off"],
+    nl: ["max_off"],
+    cs: ["max_off"],
+    sk: ["max_off"],
+  },
+  starter: {
+    en: ["starter"],
+  },
+  growth: {
+    en: ["growth"],
+  },
+  platinum: {
+    en: ["platinum"],
+  },
+  addon10: {
+    en: ["addon10"],
   },
   etykieta: {
     en: ["etykieta", "label", "etikett", "étiquette", "etichetta", "etiqueta", "rótulo", "etichetă", "label", "štítek"],
@@ -283,6 +407,87 @@ export const COMMAND_ALIASES = {
     en: ["debug"],
   },
 };
+
+/**
+ * Generate dynamic help text with localized command names
+ * @param {string} lang - Language code (e.g., "en", "pl", "de")
+ * @param {function} t - i18n translation function
+ * @returns {string} - Formatted help text with commands in user's language
+ */
+export function generateHelpText(lang, t) {
+  // Get primary aliases for current language
+  const lista = getPrimaryAlias("lista", lang);
+  const usun = getPrimaryAlias("usun", lang);
+  const dodaj = getPrimaryAlias("dodaj", lang);
+  const status = getPrimaryAlias("status", lang);
+  const panel = getPrimaryAlias("panel", lang);
+  const nazwa = getPrimaryAlias("nazwa", lang);
+  const on = getPrimaryAlias("on", lang);
+  const off = getPrimaryAlias("off", lang);
+  const single = getPrimaryAlias("pojedyncze", lang);
+  const batch = getPrimaryAlias("zbiorcze", lang);
+  const max = getPrimaryAlias("max", lang);
+  const cisza = getPrimaryAlias("cisza", lang);
+  const cisza_off = getPrimaryAlias("cisza_off", lang);
+  const najnowsze = getPrimaryAlias("najnowsze", lang);
+  const najtansze = getPrimaryAlias("najtansze", lang);
+  const plany = getPrimaryAlias("plany", lang);
+  const langCmd = getPrimaryAlias("lang", lang);
+  
+  // Build help text dynamically
+  let help = t(lang, "cmd.help_greeting") + "\n\n";
+  
+  // Basic commands
+  help += t(lang, "cmd.help_basic") + "\n";
+  help += `/${lista} ${t(lang, "cmd.help_basic_lista_desc")}\n`;
+  help += `/${usun} &lt;ID&gt; ${t(lang, "cmd.help_basic_usun_desc")}\n`;
+  help += `/${dodaj} &lt;url&gt; [${t(lang, "cmd.help_basic_name")}] ${t(lang, "cmd.help_basic_dodaj_desc")}\n`;
+  help += `/${status} ${t(lang, "cmd.help_basic_status_desc")}\n`;
+  help += `/${panel} ${t(lang, "cmd.help_basic_panel_desc")}\n`;
+  help += `/${nazwa} &lt;ID&gt; [${t(lang, "cmd.help_basic_name")}] ${t(lang, "cmd.help_basic_nazwa_desc")}\n\n`;
+  
+  // Notifications
+  help += t(lang, "cmd.help_notif") + "\n";
+  help += `/${on} ${t(lang, "cmd.help_notif_on_desc")}\n`;
+  help += `/${off} ${t(lang, "cmd.help_notif_off_desc")}\n`;
+  help += `/${single} ${t(lang, "cmd.help_notif_single_desc")}\n`;
+  help += `/${batch} ${t(lang, "cmd.help_notif_batch_desc")}\n\n`;
+  
+  // Per-link controls
+  help += t(lang, "cmd.help_perlink") + "\n";
+  help += t(lang, "cmd.help_perlink_commands", { single, batch, off, on }) + "\n";
+  help += `/${max} &lt;ID&gt; &lt;${t(lang, "cmd.help_value")}&gt; ${t(lang, "cmd.help_perlink_max_desc")}\n\n`;
+  
+  // Quiet hours
+  help += t(lang, "cmd.help_quiet") + "\n";
+  help += `/${cisza} ${t(lang, "cmd.help_quiet_show_desc")}\n`;
+  help += `/${cisza} HH-HH ${t(lang, "cmd.help_quiet_set_desc")}\n`;
+  help += `/${cisza_off} ${t(lang, "cmd.help_quiet_off_desc")}\n\n`;
+  
+  // History
+  help += t(lang, "cmd.help_history") + "\n";
+  help += `/${najnowsze} ${t(lang, "cmd.help_history_najnowsze_desc")}\n`;
+  help += `/${najnowsze} &lt;ID&gt; ${t(lang, "cmd.help_history_najnowsze_id_desc")}\n`;
+  help += `/${najtansze} ${t(lang, "cmd.help_history_najtansze_desc")}\n`;
+  help += `/${najtansze} &lt;ID&gt; ${t(lang, "cmd.help_history_najtansze_id_desc")}\n\n`;
+  
+  // Plans
+  help += t(lang, "cmd.help_plans") + "\n";
+  help += `/${plany} ${t(lang, "cmd.help_plans_show_desc")}\n\n`;
+  
+  // Language
+  help += t(lang, "cmd.help_lang") + "\n";
+  help += `/${langCmd} &lt;${t(lang, "cmd.help_code")}&gt; ${t(lang, "cmd.help_lang_set_desc")}\n\n`;
+  
+  // Examples
+  help += t(lang, "cmd.help_examples") + "\n";
+  help += `<code>/${lista}</code>\n`;
+  help += `<code>/${usun} 18</code>\n`;
+  help += `<code>/${dodaj} https://www.olx.pl/oferty/?q=iphone14 iPhone 14 OLX</code>\n`;
+  help += `<code>/${najnowsze} 18</code>`;
+  
+  return help;
+}
 
 /**
  * Normalizes user command input to canonical form
